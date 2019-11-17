@@ -5,3 +5,4 @@ authors = ["Nicolas Kirchner <nicolas.kirchner@gmail.com"]
 edition = "2018"
 
 [dependencies]
+ascii = "1.0"
