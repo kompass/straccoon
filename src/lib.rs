@@ -1,6 +1,7 @@
 pub mod elastic_buffer;
 
 use ascii::AsciiChar;
+use std::marker::PhantomData;
 
 pub use elastic_buffer::ElasticBufferStreamer;
 
@@ -33,9 +34,11 @@ pub trait Streamer {
     // If this method is called multiple times since the last next, it might panic.
     // TODO : Make a proper documentation
     fn before(&mut self);
+    fn range_from_checkpoint(&mut self, cp: Self::CheckPoint) -> &[u8];
 }
 
 
+#[derive(Debug, PartialEq)]
 pub enum ParserErrorKind {
     Unexpected,
     UnexpectedEndOfInput,
@@ -43,6 +46,7 @@ pub enum ParserErrorKind {
 }
 
 
+#[derive(Debug, PartialEq)]
 pub enum ParserErrorInfo {
     Unexpected(u8), // TODO: explicit more the unexpected and expected data type (contains end-of-input)
     Expected(u8),
@@ -51,30 +55,38 @@ pub enum ParserErrorInfo {
 }
 
 
+#[derive(Debug, PartialEq)]
 pub enum ParserError {
     Lazy(u64, ParserErrorKind),
     Detailed(u64, Vec<ParserErrorInfo>),
 }
 
 
-pub trait Parser<S: Streamer> {
-    type Output;
+pub trait Parser {
+    type Input: Streamer;
 
-    fn parse(&mut self, stream: S) -> Result<(Self::Output, S), ParserError>;
+    fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError>;
+
+    fn get<'a>(&mut self, stream: &'a mut Self::Input) -> Result<&'a[u8], ParserError>
+    {
+        let cp = stream.checkpoint();
+
+        self.parse(stream)?;
+
+        Ok(stream.range_from_checkpoint(cp))
+    }
 }
 
-pub struct Satisfy<F: FnMut(u8) -> bool> {
-    predicate: F,
-}
+pub struct Satisfy<S: Streamer, F: FnMut(u8) -> bool>(F, PhantomData<S>);
 
 
-impl<S: Streamer, F: FnMut(u8) -> bool> Parser<S> for Satisfy<F> {
-    type Output = ();
+impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Satisfy<S, F> {
+    type Input = S;
 
-    fn parse(&mut self, mut stream: S) -> Result<(Self::Output, S), ParserError> {
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         match stream.next() {
-            Ok(c) => if (self.predicate)(c) {
-                Ok(((), stream))
+            Ok(c) => if (self.0)(c) {
+                Ok(())
             } else {
                 Err(ParserError::Lazy(stream.position(), ParserErrorKind::Unexpected))
             },
@@ -85,10 +97,8 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser<S> for Satisfy<F> {
 }
 
 
-pub fn satisfy<F: FnMut(u8) -> bool>(predicate: F) -> Satisfy<F> {
-    Satisfy {
-        predicate,
-    }
+pub fn satisfy<S: Streamer, F: FnMut(u8) -> bool>(predicate: F) -> Satisfy<S, F> {
+    Satisfy(predicate, PhantomData)
 }
 
 
@@ -102,53 +112,106 @@ macro_rules! byte_parser {
 }
 
 
-pub struct AlphaNum;
+pub struct AlphaNum<S: Streamer>(PhantomData<S>);
 
 
-impl<S: Streamer> Parser<S> for AlphaNum {
-    type Output = ();
+impl<S: Streamer> Parser for AlphaNum<S> {
+    type Input = S;
 
-    fn parse(&mut self, stream: S) -> Result<((), S), ParserError> {
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         byte_parser!(alpha_num, is_alphanumeric).parse(stream)
     }
 }
 
 
-pub fn alpha_num() -> AlphaNum {
-    AlphaNum
+pub fn alpha_num<S: Streamer>() -> AlphaNum<S> {
+    AlphaNum(PhantomData)
 }
 
 
-pub struct Digit;
+pub struct Digit<S: Streamer>(PhantomData<S>);
 
-impl<S: Streamer> Parser<S> for Digit {
-    type Output = ();
+impl<S: Streamer> Parser for Digit<S> {
+    type Input = S;
 
-    fn parse(&mut self, stream: S) -> Result<((), S), ParserError> {
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         byte_parser!(digit, is_ascii_digit).parse(stream)
     }
 }
 
 
-pub struct Letter;
+pub fn digit<S: Streamer>() -> Digit<S> {
+    Digit(PhantomData)
+}
 
-impl<S: Streamer> Parser<S> for Letter {
-    type Output = ();
 
-    fn parse(&mut self, stream: S) -> Result<((), S), ParserError> {
+pub struct Letter<S: Streamer>(PhantomData<S>);
+
+impl<S: Streamer> Parser for Letter<S> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         byte_parser!(letter, is_alphabetic).parse(stream)
     }
 }
 
 
-pub struct Space;
+pub fn letter<S: Streamer>() -> Letter<S> {
+    Letter(PhantomData)
+}
 
-impl<S: Streamer> Parser<S> for Space {
-    type Output = ();
 
-    fn parse(&mut self, stream: S) -> Result<((), S), ParserError> {
+pub struct Space<S: Streamer>(PhantomData<S>);
+
+impl<S: Streamer> Parser for Space<S> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         byte_parser!(space, is_ascii_whitespace).parse(stream)
     }
+}
+
+
+pub fn space<S: Streamer>() -> Space<S> {
+    Space(PhantomData)
+}
+
+
+pub struct Many<P>(P);
+
+impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
+    type Input = S;
+    
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
+        loop {
+            let position_watchdog = stream.position();
+
+            match self.0.parse(stream) {
+                Ok(_) => continue,
+
+                Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
+                    if stream.position() > position_watchdog + 1 {
+                        panic!("Many: the parser wasn't LL1");
+                    }
+
+                    if stream.position() == position_watchdog + 1 {
+                        stream.before();
+                    }
+
+                    break;
+                },
+
+                e @ Err(_) => return e,
+            }
+        }
+
+        Ok(())
+    }
+}
+
+
+pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
+    Many(parser)
 }
 
 
@@ -164,12 +227,24 @@ mod tests {
         let mut stream1 = ElasticBufferStreamer::new(fake_read1);
 
         let mut parser1 = alpha_num();
-        assert!(parser1.parse(stream1).is_err());
+        assert!(parser1.parse(&mut stream1).is_err());
 
         let fake_read2 = &b"This is the text !"[..];
         let mut stream2 = ElasticBufferStreamer::new(fake_read2);
 
         let mut parser2 = alpha_num();
-        assert!(parser2.parse(stream2).is_ok());
+        assert!(parser2.parse(&mut stream2).is_ok());
+    }
+
+    #[test]
+    fn it_gets_parsed_range() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::new(fake_read);
+
+        let mut parser = many(alpha_num());
+
+        let rg = parser.get(&mut stream).unwrap();
+
+        assert_eq!(rg, &(b"This")[..]);
     }
 }

@@ -1,6 +1,7 @@
 use core::num::NonZeroUsize;
+use slice_deque::SliceDeque;
+use slice_of_array::prelude::*;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
 use std::io::Read;
 use std::rc::{Rc, Weak};
 
@@ -11,6 +12,7 @@ use super::StreamError;
 const ITEM_INDEX_SIZE: usize = 13;
 const ITEM_INDEX_MASK: usize = (1 << ITEM_INDEX_SIZE) - 1;
 pub const CHUNK_SIZE: usize = 1 << ITEM_INDEX_SIZE;
+pub const INITIAL_CAPACITY: usize = 4;
 
 pub type InternalCheckPoint = Cell<usize>;
 
@@ -21,6 +23,7 @@ impl CheckPoint {
     fn new(pos: usize) -> CheckPoint {
         CheckPoint(Rc::new(Cell::new(pos)))
     }
+
 
     fn inner(&self) -> usize {
         self.0.get()
@@ -44,6 +47,7 @@ impl CheckPointSet {
         CheckPointSet(RefCell::new(Vec::new()))
     }
 
+
     fn insert(&self, pos: usize) -> CheckPoint {
         let cp = CheckPoint::new(pos);
         self.0
@@ -52,6 +56,7 @@ impl CheckPointSet {
 
         cp
     }
+
 
     fn min_checkpoint_position(&self) -> Option<usize> {
         let mut min: Option<usize> = None;
@@ -71,6 +76,7 @@ impl CheckPointSet {
 
         min
     }
+
 
     fn sub_offset(&self, value: usize) {
         for cp in self.0.borrow().iter() {
@@ -100,9 +106,10 @@ fn read_exact_or_eof<R: Read>(
     Ok(NonZeroUsize::new(chunk.len()))
 }
 
+
 pub struct ElasticBufferStreamer<R: Read> {
     raw_read: R,
-    buffer: VecDeque<[u8; CHUNK_SIZE]>,
+    buffer: SliceDeque<[u8; CHUNK_SIZE]>,
     eof: Option<NonZeroUsize>,
     checkpoints: CheckPointSet,
     before_watchdog: bool,
@@ -114,7 +121,7 @@ impl<R: Read> ElasticBufferStreamer<R> {
     pub fn new(read: R) -> Self {
         Self {
             raw_read: read,
-            buffer: VecDeque::new(),
+            buffer: SliceDeque::with_capacity(INITIAL_CAPACITY),
             eof: None,
             checkpoints: CheckPointSet::new(),
             before_watchdog: false,
@@ -123,13 +130,16 @@ impl<R: Read> ElasticBufferStreamer<R> {
         }
     }
 
+
     fn chunk_index(&self) -> usize {
         self.cursor_pos >> ITEM_INDEX_SIZE
     }
 
+
     fn item_index(&self) -> usize {
         self.cursor_pos & ITEM_INDEX_MASK
     }
+
 
     fn free_useless_chunks(&mut self) {
         let checkpoint_pos_min = self.checkpoints.min_checkpoint_position();
@@ -144,6 +154,7 @@ impl<R: Read> ElasticBufferStreamer<R> {
         self.offset += offset_delta as u64;
         self.checkpoints.sub_offset(offset_delta);
     }
+
 
     pub fn buffer_len(&self) -> usize {
         self.buffer.len()
@@ -182,18 +193,22 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
         Ok(item)
     }
 
+
     fn position(&self) -> u64 {
         self.offset + self.cursor_pos as u64
             
     }
 
+
     fn checkpoint(&self) -> CheckPoint {
         self.checkpoints.insert(self.cursor_pos)
     }
 
+
     fn reset(&mut self, checkpoint: CheckPoint) {
         self.cursor_pos = checkpoint.inner();
     }
+
 
     fn before(&mut self) {
         if self.before_watchdog {
@@ -202,6 +217,16 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
             self.cursor_pos -= 1;
             self.before_watchdog = true;
         }
+    }
+
+
+    fn range_from_checkpoint(&mut self, cp: CheckPoint) -> &[u8] {
+        let range_begin = cp.inner();
+        let range_end = self.cursor_pos;
+
+        let flat_slice = self.buffer.as_slice().flat();
+
+        &flat_slice[range_begin..range_end]
     }
 }
 
@@ -366,5 +391,56 @@ mod tests {
         }
 
         assert_eq!(stream.buffer_len(), 1);
+    }
+
+
+    #[test]
+    fn it_gets_ranges() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::new(fake_read);
+
+        let cp1 = stream.checkpoint();
+
+        for _ in 0..3 {
+            stream.next().unwrap();
+        }
+
+        let cp2 = stream.checkpoint();
+
+        for _ in 0..2 {
+            stream.next().unwrap();
+        }
+
+        let rg1 = stream.range_from_checkpoint(cp1);
+
+        assert_eq!(rg1, &(b"This ")[..]);
+
+        let rg2 = stream.range_from_checkpoint(cp2);
+
+        assert_eq!(rg2, &(b"s ")[..]);
+    }
+
+    #[test]
+    fn it_increases_capacity_when_needed() {
+        let final_capacity = CHUNK_SIZE * (INITIAL_CAPACITY + 2);
+        let mut fake_read = String::with_capacity(final_capacity);
+
+        let beautiful_sentence = "This is a sentence, what a beautiful sentence !";
+        let number_of_sentences = final_capacity / beautiful_sentence.len();
+        for _ in 0..number_of_sentences {
+            fake_read += beautiful_sentence;
+        }
+
+        let mut stream = ElasticBufferStreamer::new(fake_read.as_bytes());
+
+        let cp = stream.checkpoint();
+
+        for _ in 0..(number_of_sentences * beautiful_sentence.len()) {
+            stream.next().unwrap();
+        }
+
+        let rg = stream.range_from_checkpoint(cp);
+
+        assert_eq!(rg.len(), number_of_sentences * beautiful_sentence.len());
     }
 }

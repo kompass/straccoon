@@ -6,3 +6,5 @@ edition = "2018"
 
 [dependencies]
 ascii = "1.0"
+slice-deque = "0.3"
+slice-of-array = "0.2"
