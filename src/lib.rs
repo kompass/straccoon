@@ -210,6 +210,50 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
 }
 
 
+macro_rules! tuple_parser {
+    ($fid: ident $(, $id: ident)*) => {
+        #[allow(non_snake_case)]
+        #[allow(unused_assignments)]
+        #[allow(unused_mut)]
+        impl <$fid, $($id),*> Parser for ($fid, $($id),*)
+            where $fid: Parser,
+                $($id: Parser<Input=$fid::Input>),*
+                // $(<$id as Parser>::Input == <$fid as Parser>::Input),*
+        {
+            type Input = $fid::Input;
+
+            fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+                let (ref mut $fid, $(ref mut $id),*) = *self;
+
+                let mut last = $fid.parse(stream)?;
+
+                $(
+                    last = $id.parse(stream)?;
+                )*
+
+                Ok(last)
+            }
+        }
+    }
+}
+
+
+tuple_parser!(A);
+tuple_parser!(A, B);
+tuple_parser!(A, B, C);
+tuple_parser!(A, B, C, D);
+tuple_parser!(A, B, C, D, E);
+tuple_parser!(A, B, C, D, E, F);
+tuple_parser!(A, B, C, D, E, F, G);
+tuple_parser!(A, B, C, D, E, F, G, H);
+tuple_parser!(A, B, C, D, E, F, G, H, I);
+tuple_parser!(A, B, C, D, E, F, G, H, I, J);
+tuple_parser!(A, B, C, D, E, F, G, H, I, J, K);
+tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L);
+tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M);
+tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
+
+
 pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
     Many(parser)
 }
@@ -246,5 +290,31 @@ mod tests {
         let rg = parser.get(&mut stream).unwrap();
 
         assert_eq!(rg, &(b"This")[..]);
+    }
+
+    #[test]
+    fn it_merges_parser_sequences() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::new(fake_read);
+
+        let mut parser1 = (alpha_num(),);
+        let mut parser2 = (alpha_num(), alpha_num());
+        let mut parser3 = (alpha_num(), alpha_num(), alpha_num());
+
+        let cp_beginning = stream.checkpoint();
+
+        let rg = parser1.get(&mut stream).unwrap();
+        assert_eq!(rg, &(b"T")[..]);
+
+        stream.reset(cp_beginning);
+        let cp_beginning = stream.checkpoint();
+
+        let rg = parser2.get(&mut stream).unwrap();
+        assert_eq!(rg, &(b"Th")[..]);
+
+        stream.reset(cp_beginning);
+
+        let rg = parser3.get(&mut stream).unwrap();
+        assert_eq!(rg, &(b"Thi")[..]);
     }
 }
