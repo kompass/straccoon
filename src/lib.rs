@@ -210,6 +210,11 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
 }
 
 
+pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
+    Many(parser)
+}
+
+
 macro_rules! tuple_parser {
     ($fid: ident $(, $id: ident)*) => {
         #[allow(non_snake_case)]
@@ -252,11 +257,6 @@ tuple_parser!(A, B, C, D, E, F, G, H, I, J, K);
 tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L);
 tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
-
-
-pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
-    Many(parser)
-}
 
 
 #[cfg(test)]
