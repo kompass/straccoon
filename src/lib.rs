@@ -215,6 +215,33 @@ pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
 }
 
 
+pub struct Attempt<P>(P);
+
+impl<S: Streamer, P: Parser<Input=S>> Parser for Attempt<P> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+        let cp = stream.checkpoint();
+
+        let parse_status = self.0.parse(stream);
+
+        match parse_status {
+            Err(ParserError::Lazy(_, ref kind)) if kind == &ParserErrorKind::Unexpected || kind == &ParserErrorKind::UnexpectedEndOfInput => {
+                stream.reset(cp);
+            },
+            _ => ()
+        }
+
+        parse_status
+    }
+}
+
+
+pub fn attempt<S: Streamer, P: Parser<Input=S>>(parser: P) -> Attempt<P> {
+    Attempt(parser)
+}
+
+
 macro_rules! tuple_parser {
     ($fid: ident $(, $id: ident)*) => {
         #[allow(non_snake_case)]
@@ -316,5 +343,16 @@ mod tests {
 
         let rg = parser3.get(&mut stream).unwrap();
         assert_eq!(rg, &(b"Thi")[..]);
+    }
+
+    #[test]
+    fn it_recovers_on_failed_attempts() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::new(fake_read);
+
+        let mut parser = many(attempt((alpha_num(), alpha_num(), alpha_num(), alpha_num(), space())));
+
+        let rg = parser.get(&mut stream).unwrap();
+        assert_eq!(rg, &(b"This ")[..]);
     }
 }
