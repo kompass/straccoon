@@ -285,6 +285,38 @@ tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 
 
+pub struct Maybe<P>(P);
+
+impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+        let position_watchdog = stream.position();
+
+        match self.0.parse(stream) {
+            Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
+                if stream.position() > position_watchdog + 1 {
+                    panic!("Maybe: the parser wasn't LL1");
+                }
+
+                if stream.position() == position_watchdog + 1 {
+                    stream.before();
+                }
+
+                Ok(())
+            },
+
+            e @ _ => e,
+        }
+    }
+}
+
+
+pub fn maybe<P: Parser>(parser: P) -> Maybe<P> {
+    Maybe(parser)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,5 +385,20 @@ mod tests {
 
         let rg = parser.get(&mut stream).unwrap();
         assert_eq!(rg, &(b"This ")[..]);
+    }
+
+    #[test]
+    fn it_parses_maybe() {
+        let mut parser = (maybe(space()), letter());
+
+        let fake_read1 = &b"This"[..];
+        let mut stream1 = ElasticBufferStreamer::new(fake_read1);
+        let rg1 = parser.get(&mut stream1).unwrap();
+        assert_eq!(rg1, &(b"T")[..]);
+
+        let fake_read2 = &b" is the text !"[..];
+        let mut stream2 = ElasticBufferStreamer::new(fake_read2);
+        let rg2 = parser.get(&mut stream2).unwrap();
+        assert_eq!(rg2, &(b" i")[..]);
     }
 }
