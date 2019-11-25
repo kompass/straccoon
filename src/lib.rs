@@ -250,7 +250,6 @@ macro_rules! tuple_parser {
         impl <$fid, $($id),*> Parser for ($fid, $($id),*)
             where $fid: Parser,
                 $($id: Parser<Input=$fid::Input>),*
-                // $(<$id as Parser>::Input == <$fid as Parser>::Input),*
         {
             type Input = $fid::Input;
 
