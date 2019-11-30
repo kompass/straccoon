@@ -110,6 +110,7 @@ fn read_exact_or_eof<R: Read>(
 pub struct ElasticBufferStreamer<R: Read> {
     raw_read: R,
     buffer: SliceDeque<[u8; CHUNK_SIZE]>,
+    max_size: Option<usize>,
     eof: Option<NonZeroUsize>,
     checkpoints: CheckPointSet,
     before_watchdog: bool,
@@ -118,16 +119,33 @@ pub struct ElasticBufferStreamer<R: Read> {
 }
 
 impl<R: Read> ElasticBufferStreamer<R> {
-    pub fn new(read: R) -> Self {
+    fn with_maybe_max_size(read: R, max_size: Option<usize>) -> Self {
         Self {
             raw_read: read,
             buffer: SliceDeque::with_capacity(INITIAL_CAPACITY),
+            max_size,
             eof: None,
             checkpoints: CheckPointSet::new(),
             before_watchdog: false,
             cursor_pos: 0,
             offset: 0,
         }
+    }
+
+
+    pub fn unlimited(read: R) -> Self {
+        Self::with_maybe_max_size(read, None)
+    }
+
+
+    pub fn with_max_size(read: R, max_size: usize) -> Self {
+        let max_buffer_size = if max_size % CHUNK_SIZE != 0 {
+            max_size / CHUNK_SIZE + 1
+        } else {
+            max_size / CHUNK_SIZE
+        };
+
+        Self::with_maybe_max_size(read, Some(max_buffer_size))
     }
 
 
@@ -174,6 +192,13 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
         if self.chunk_index() == self.buffer.len() {
             assert!(self.eof.is_none());
             self.free_useless_chunks();
+
+            if let Some(max_size) = self.max_size {
+                if self.buffer.len() >= max_size {
+                    return Err(StreamError::BufferFull);
+                }
+            }
+
             self.buffer.push_back([0; CHUNK_SIZE]);
             self.eof = read_exact_or_eof(&mut self.raw_read, self.buffer.back_mut().unwrap())?;
         }
@@ -238,7 +263,7 @@ mod tests {
     #[test]
     fn it_next_on_one_chunk() {
         let fake_read = &b"This is the text !"[..];
-        let mut stream = ElasticBufferStreamer::new(fake_read);
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
         assert_eq!(stream.next(), Ok(b'T'));
         assert_eq!(stream.next(), Ok(b'h'));
         assert_eq!(stream.next(), Ok(b'i'));
@@ -267,7 +292,7 @@ mod tests {
             fake_read += beautiful_sentence;
         }
 
-        let mut stream = ElasticBufferStreamer::new(fake_read.as_bytes());
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read.as_bytes());
 
         assert_eq!(stream.next(), Ok(b'T'));
         assert_eq!(stream.next(), Ok(b'h'));
@@ -318,7 +343,7 @@ mod tests {
             fake_read += beautiful_sentence;
         }
 
-        let mut stream = ElasticBufferStreamer::new(fake_read.as_bytes());
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read.as_bytes());
 
         let first_sentence_of_next_chunk_dist =
             CHUNK_SIZE + beautiful_sentence.len() - CHUNK_SIZE % beautiful_sentence.len();
@@ -369,7 +394,7 @@ mod tests {
             fake_read += beautiful_sentence;
         }
 
-        let mut stream = ElasticBufferStreamer::new(fake_read.as_bytes());
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read.as_bytes());
 
         let cp = stream.checkpoint();
         assert_eq!(stream.buffer_len(), 0);
@@ -397,7 +422,7 @@ mod tests {
     #[test]
     fn it_gets_ranges() {
         let fake_read = &b"This is the text !"[..];
-        let mut stream = ElasticBufferStreamer::new(fake_read);
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
         let cp1 = stream.checkpoint();
 
@@ -431,7 +456,7 @@ mod tests {
             fake_read += beautiful_sentence;
         }
 
-        let mut stream = ElasticBufferStreamer::new(fake_read.as_bytes());
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read.as_bytes());
 
         let cp = stream.checkpoint();
 

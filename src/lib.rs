@@ -8,6 +8,7 @@ pub use elastic_buffer::ElasticBufferStreamer;
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamError {
     EndOfInput,
+    BufferFull,
     Other,
 }
 
@@ -317,6 +318,9 @@ pub fn maybe<P: Parser>(parser: P) -> Maybe<P> {
 }
 
 
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,13 +330,13 @@ mod tests {
     #[test]
     fn it_parses_alpha_num() {
         let fake_read1 = &b"!This is the text !"[..];
-        let mut stream1 = ElasticBufferStreamer::new(fake_read1);
+        let mut stream1 = ElasticBufferStreamer::unlimited(fake_read1);
 
         let mut parser1 = alpha_num();
         assert!(parser1.parse(&mut stream1).is_err());
 
         let fake_read2 = &b"This is the text !"[..];
-        let mut stream2 = ElasticBufferStreamer::new(fake_read2);
+        let mut stream2 = ElasticBufferStreamer::unlimited(fake_read2);
 
         let mut parser2 = alpha_num();
         assert!(parser2.parse(&mut stream2).is_ok());
@@ -341,7 +345,7 @@ mod tests {
     #[test]
     fn it_gets_parsed_range() {
         let fake_read = &b"This is the text !"[..];
-        let mut stream = ElasticBufferStreamer::new(fake_read);
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
         let mut parser = many(alpha_num());
 
@@ -353,7 +357,7 @@ mod tests {
     #[test]
     fn it_merges_parser_sequences() {
         let fake_read = &b"This is the text !"[..];
-        let mut stream = ElasticBufferStreamer::new(fake_read);
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
         let mut parser1 = (alpha_num(),);
         let mut parser2 = (alpha_num(), alpha_num());
@@ -379,7 +383,7 @@ mod tests {
     #[test]
     fn it_recovers_on_failed_attempts() {
         let fake_read = &b"This is the text !"[..];
-        let mut stream = ElasticBufferStreamer::new(fake_read);
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
         let mut parser = many(attempt((alpha_num(), alpha_num(), alpha_num(), alpha_num(), space())));
 
@@ -392,12 +396,12 @@ mod tests {
         let mut parser = (maybe(space()), letter());
 
         let fake_read1 = &b"This"[..];
-        let mut stream1 = ElasticBufferStreamer::new(fake_read1);
+        let mut stream1 = ElasticBufferStreamer::unlimited(fake_read1);
         let rg1 = parser.get(&mut stream1).unwrap();
         assert_eq!(rg1, &(b"T")[..]);
 
         let fake_read2 = &b" is the text !"[..];
-        let mut stream2 = ElasticBufferStreamer::new(fake_read2);
+        let mut stream2 = ElasticBufferStreamer::unlimited(fake_read2);
         let rg2 = parser.get(&mut stream2).unwrap();
         assert_eq!(rg2, &(b" i")[..]);
     }
