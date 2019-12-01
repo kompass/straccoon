@@ -36,6 +36,7 @@ pub trait Streamer {
     // TODO : Make a proper documentation
     fn before(&mut self);
     fn range_from_checkpoint(&mut self, cp: Self::CheckPoint) -> &[u8];
+    fn range_from_to_checkpoint(&mut self, from_cp: Self::CheckPoint, to_cp: Self::CheckPoint) -> &[u8];
 }
 
 
@@ -75,6 +76,21 @@ pub trait Parser {
         self.parse(stream)?;
 
         Ok(stream.range_from_checkpoint(cp))
+    }
+
+    fn get_between<'a, P: Parser<Input=Self::Input>>(&mut self, stream: &'a mut Self::Input, mut between: P) -> Result<&'a[u8], ParserError>
+    {
+        between.parse(stream)?;
+
+        let from_cp = stream.checkpoint();
+
+        self.parse(stream)?;
+
+        let to_cp = stream.checkpoint();
+
+        between.parse(stream)?;
+
+        Ok(stream.range_from_to_checkpoint(from_cp, to_cp))
     }
 }
 
@@ -352,6 +368,19 @@ mod tests {
         let rg = parser.get(&mut stream).unwrap();
 
         assert_eq!(rg, &(b"This")[..]);
+    }
+
+    #[test]
+    fn it_gets_range_between_delimiters() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = (letter(), letter());
+        let delimiter = letter();
+
+        let rg = parser.get_between(&mut stream, delimiter).unwrap();
+
+        assert_eq!(rg, &(b"hi")[..]);
     }
 
     #[test]

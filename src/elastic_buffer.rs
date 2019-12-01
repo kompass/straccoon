@@ -253,6 +253,15 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
 
         &flat_slice[range_begin..range_end]
     }
+
+    fn range_from_to_checkpoint(&mut self, from_cp: Self::CheckPoint, to_cp: Self::CheckPoint) -> &[u8] {
+        let range_begin = from_cp.inner();
+        let range_end = to_cp.inner();
+
+        let flat_slice = self.buffer.as_slice().flat();
+
+        &flat_slice[range_begin..range_end]
+    }
 }
 
 
