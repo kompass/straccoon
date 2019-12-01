@@ -258,6 +258,48 @@ pub fn attempt<S: Streamer, P: Parser<Input=S>>(parser: P) -> Attempt<P> {
     Attempt(parser)
 }
 
+pub struct NotFollowedBy<P>(P);
+
+impl<S: Streamer, P: Parser<Input=S>> Parser for NotFollowedBy<P> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+        loop {
+            let position_watchdog = stream.position();
+
+            match self.0.parse(stream) {
+                Ok(()) => {
+                    if stream.position() > position_watchdog + 1 {
+                        panic!("NotFollowedBy: the parser wasn't LL1");
+                    }
+
+                    if stream.position() == position_watchdog + 1 {
+                        stream.before();
+                    }
+
+                    return Ok(());
+                },
+                Err(ParserError::Lazy(_, ref kind)) if kind == &ParserErrorKind::Unexpected || kind == &ParserErrorKind::UnexpectedEndOfInput => {
+                    if stream.position() > position_watchdog + 1 {
+                        panic!("NotFollowedBy: the parser wasn't LL1");
+                    }
+
+                    if stream.position() == position_watchdog {
+                        stream.next().map_err(|e| ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))?;
+                    }
+
+                    continue;
+                },
+                e @ _ => return e,
+            }
+        }
+    }
+}
+
+pub fn not_followed_by<S: Streamer, P: Parser<Input=S>>(parser: P) -> NotFollowedBy<P> {
+    NotFollowedBy(parser)
+}
+
 
 macro_rules! tuple_parser {
     ($fid: ident $(, $id: ident)*) => {
@@ -433,5 +475,16 @@ mod tests {
         let mut stream2 = ElasticBufferStreamer::unlimited(fake_read2);
         let rg2 = parser.get(&mut stream2).unwrap();
         assert_eq!(rg2, &(b" i")[..]);
+    }
+
+    #[test]
+    fn it_parses_until_something() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = not_followed_by(space());
+
+        let rg = parser.get(&mut stream).unwrap();
+        assert_eq!(rg, &(b"This")[..]);
     }
 }
