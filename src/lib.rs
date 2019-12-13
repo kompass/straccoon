@@ -376,7 +376,64 @@ pub fn maybe<P: Parser>(parser: P) -> Maybe<P> {
 }
 
 
+pub trait ChoiceParser {
+    type Input: Streamer;
 
+    fn choice_parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError>;
+}
+
+
+impl<I: Streamer, A: Parser<Input=I>, B: Parser<Input=I>> ChoiceParser for (A, B) {
+    type Input = I;
+
+    fn choice_parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+        let position_watchdog = stream.position();
+
+        match self.0.parse(stream) {
+            Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                if stream.position() > position_watchdog + 1 {
+                    panic!("Maybe: the parser wasn't LL1");
+                }
+
+                if stream.position() == position_watchdog + 1 {
+                    stream.before();
+                }
+            },
+            e @ _ => return e,
+        }
+
+        match self.1.parse(stream) {
+            e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                if stream.position() > position_watchdog + 1 {
+                    panic!("Maybe: the parser wasn't LL1");
+                }
+
+                if stream.position() == position_watchdog + 1 {
+                    stream.before();
+                }
+
+                return e
+            },
+            e @ _ => return e,
+        }
+    }
+}
+
+
+pub struct Choice<C>(C);
+
+impl<S: Streamer, C: ChoiceParser<Input=S>> Parser for Choice<C> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+        self.0.choice_parse(stream)
+    }
+}
+
+
+pub fn choice<C: ChoiceParser>(parsers: C) -> Choice<C> {
+    Choice(parsers)
+}
 
 
 #[cfg(test)]
@@ -486,5 +543,16 @@ mod tests {
 
         let rg = parser.get(&mut stream).unwrap();
         assert_eq!(rg, &(b"This")[..]);
+    }
+
+    #[test]
+    fn it_chooses_the_good_parser() {
+        let fake_read = &b"This is the text !"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = choice((space(), letter()));
+
+        let rg = parser.get(&mut stream).unwrap();
+        assert_eq!(rg, &(b"T")[..]);
     }
 }
