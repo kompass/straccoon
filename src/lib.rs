@@ -268,9 +268,11 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for NotFollowedBy<P> {
 
             match self.0.parse(stream) {
                 Ok(()) => {
-                    if stream.position() > position_watchdog {
-                        panic!("NotFollowedBy: the parser wasn't LL1");
+                    if stream.position() > position_watchdog + 1 {
+                        panic!("NotFollowedBy: the parser parsed more than one byte");
                     }
+
+                    stream.before();
 
                     return Ok(());
                 },
@@ -278,6 +280,8 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for NotFollowedBy<P> {
                     if stream.position() > position_watchdog {
                         panic!("NotFollowedBy: the parser wasn't LL1");
                     }
+
+                    stream.next().unwrap();
 
                     continue;
                 },
