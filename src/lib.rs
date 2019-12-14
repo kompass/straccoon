@@ -294,6 +294,7 @@ pub fn attempt<S: Streamer, P: Parser<Input=S>>(parser: P) -> Attempt<P> {
 
 pub struct NotFollowedBy<P>(P);
 
+// TODO: Implement not_followed_by for parsers reading only one byte (using another trait)
 impl<S: Streamer, P: Parser<Input=S>> Parser for NotFollowedBy<P> {
     type Input = S;
 
