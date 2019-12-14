@@ -383,41 +383,76 @@ pub trait ChoiceParser {
 }
 
 
-impl<I: Streamer, A: Parser<Input=I>, B: Parser<Input=I>> ChoiceParser for (A, B) {
-    type Input = I;
+macro_rules! choice_parser {
+    ($fid: ident $(, $id: ident)*) => {
+        #[allow(non_snake_case)]
+        #[allow(unused_assignments)]
+        #[allow(unused_mut)]
+        impl <$fid, $($id),*> ChoiceParser for ($fid, $($id),*)
+        where $fid: Parser,
+        $($id: Parser<Input=$fid::Input>),*
+        {
+            type Input = $fid::Input;
 
-    fn choice_parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
-        let position_watchdog = stream.position();
+            fn choice_parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+                let (ref mut $fid, $(ref mut $id),*) = *self;
 
-        match self.0.parse(stream) {
-            Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
-                if stream.position() > position_watchdog + 1 {
-                    panic!("Maybe: the parser wasn't LL1");
-                }
+                let position_watchdog = stream.position();
 
-                if stream.position() == position_watchdog + 1 {
-                    stream.before();
-                }
-            },
-            e @ _ => return e,
-        }
+                let mut last = match $fid.parse(stream) {
+                    e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                        if stream.position() > position_watchdog + 1 {
+                            panic!("Choice: the parser wasn't LL1");
+                        }
 
-        match self.1.parse(stream) {
-            e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
-                if stream.position() > position_watchdog + 1 {
-                    panic!("Maybe: the parser wasn't LL1");
-                }
+                        if stream.position() == position_watchdog + 1 {
+                            stream.before();
+                        }
 
-                if stream.position() == position_watchdog + 1 {
-                    stream.before();
-                }
+                        e
+                    },
+                    e @ _ => return e,
+                };
 
-                return e
-            },
-            e @ _ => return e,
+
+                $(
+                    last = match $id.parse(stream) {
+                        e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                            if stream.position() > position_watchdog + 1 {
+                                panic!("Choice: the parser wasn't LL1");
+                            }
+
+                            if stream.position() == position_watchdog + 1 {
+                                stream.before();
+                            }
+
+                            e
+                        },
+                        e @ _ => return e,
+                    };
+
+                )*
+
+                last
+            }
         }
     }
 }
+
+
+choice_parser!(A);
+choice_parser!(A, B);
+choice_parser!(A, B, C);
+choice_parser!(A, B, C, D, E);
+choice_parser!(A, B, C, D, E, F);
+choice_parser!(A, B, C, D, E, F, G);
+choice_parser!(A, B, C, D, E, F, G, H);
+choice_parser!(A, B, C, D, E, F, G, H, I);
+choice_parser!(A, B, C, D, E, F, G, H, I, J);
+choice_parser!(A, B, C, D, E, F, G, H, I, J, K);
+choice_parser!(A, B, C, D, E, F, G, H, I, J, K, L);
+choice_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M);
+choice_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 
 
 pub struct Choice<C>(C);
@@ -550,9 +585,28 @@ mod tests {
         let fake_read = &b"This is the text !"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
-        let mut parser = choice((space(), letter()));
+        let initial_position_cp = stream.checkpoint();
 
-        let rg = parser.get(&mut stream).unwrap();
-        assert_eq!(rg, &(b"T")[..]);
+        let mut parser1 = choice((letter(),));
+
+        let rg1 = parser1.get(&mut stream).unwrap();
+        assert_eq!(rg1, &(b"T")[..]);
+
+        stream.reset(initial_position_cp);
+        let initial_position_cp = stream.checkpoint();
+
+        let mut parser2 = choice((space(), letter()));
+
+        let rg2 = parser2.get(&mut stream).unwrap();
+        assert_eq!(rg2, &(b"T")[..]);
+
+        stream.reset(initial_position_cp);
+        // let initial_position_cp = stream.checkpoint();
+
+        let mut parser3 = choice((space(), space(), letter()));
+
+        let rg3 = parser3.get(&mut stream).unwrap();
+        assert_eq!(rg3, &(b"T")[..]);
+
     }
 }
