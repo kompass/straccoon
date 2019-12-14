@@ -44,6 +44,7 @@ pub trait Streamer {
 pub enum ParserErrorKind {
     Unexpected,
     UnexpectedEndOfInput,
+    TooMany,
     InputError(StreamError),
 }
 
@@ -228,6 +229,40 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
 
 pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
     Many(parser)
+}
+
+
+pub struct ManyMax<P>(P, usize);
+
+impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
+        for _ in 0..self.1 {
+            let position_watchdog = stream.position();
+
+            match self.0.parse(stream) {
+                Ok(_) => continue,
+
+                Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput))=> {
+                    if stream.position() > position_watchdog {
+                        panic!("ManyMax: the parser wasn't LL1");
+                    }
+
+                    return Ok(());
+                },
+
+                e @ Err(_) => return e,
+            }
+        }
+
+        Err(ParserError::Lazy(stream.position(), ParserErrorKind::TooMany))
+    }
+}
+
+
+pub fn many_max<P>(parser: P, max_count: usize) -> ManyMax<P> {
+    ManyMax(parser, max_count)
 }
 
 
@@ -498,6 +533,22 @@ mod tests {
         let rg = parser.get_between(&mut stream, delimiter).unwrap();
 
         assert_eq!(rg, &(b"hi")[..]);
+    }
+
+    #[test]
+    fn it_get_parsed_range_with_max_size() {
+        let fake_read = &b"Its HUUUUUUUUUUUUUUUUUUUUUUUUUGE"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = many_max(alpha_num(), 5);
+
+        let rg1 = parser.get(&mut stream).unwrap();
+
+        assert_eq!(rg1, &(b"Its")[..]);
+
+        stream.next().unwrap();
+
+        assert_eq!(parser.get(&mut stream), Err(ParserError::Lazy(9, ParserErrorKind::TooMany)));
     }
 
     #[test]
