@@ -105,7 +105,10 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Satisfy<S, F> {
             Ok(c) => if (self.0)(c) {
                 Ok(())
             } else {
-                Err(ParserError::Lazy(stream.position(), ParserErrorKind::Unexpected))
+                let unexpected_pos = stream.position();
+                stream.before();
+
+                Err(ParserError::Lazy(unexpected_pos, ParserErrorKind::Unexpected))
             },
 
             Err(e) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))
@@ -198,7 +201,7 @@ pub struct Many<P>(P);
 
 impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
     type Input = S;
-    
+
     fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         loop {
             let position_watchdog = stream.position();
@@ -207,12 +210,8 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
                 Ok(_) => continue,
 
                 Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
-                    if stream.position() > position_watchdog + 1 {
+                    if stream.position() > position_watchdog {
                         panic!("Many: the parser wasn't LL1");
-                    }
-
-                    if stream.position() == position_watchdog + 1 {
-                        stream.before();
                     }
 
                     break;
@@ -269,23 +268,15 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for NotFollowedBy<P> {
 
             match self.0.parse(stream) {
                 Ok(()) => {
-                    if stream.position() > position_watchdog + 1 {
+                    if stream.position() > position_watchdog {
                         panic!("NotFollowedBy: the parser wasn't LL1");
-                    }
-
-                    if stream.position() == position_watchdog + 1 {
-                        stream.before();
                     }
 
                     return Ok(());
                 },
                 Err(ParserError::Lazy(_, ref kind)) if kind == &ParserErrorKind::Unexpected || kind == &ParserErrorKind::UnexpectedEndOfInput => {
-                    if stream.position() > position_watchdog + 1 {
+                    if stream.position() > position_watchdog {
                         panic!("NotFollowedBy: the parser wasn't LL1");
-                    }
-
-                    if stream.position() == position_watchdog {
-                        stream.next().map_err(|e| ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))?;
                     }
 
                     continue;
@@ -354,12 +345,8 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
 
         match self.0.parse(stream) {
             Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
-                if stream.position() > position_watchdog + 1 {
+                if stream.position() > position_watchdog {
                     panic!("Maybe: the parser wasn't LL1");
-                }
-
-                if stream.position() == position_watchdog + 1 {
-                    stream.before();
                 }
 
                 Ok(())
@@ -401,12 +388,8 @@ macro_rules! choice_parser {
 
                 let mut last = match $fid.parse(stream) {
                     e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
-                        if stream.position() > position_watchdog + 1 {
+                        if stream.position() > position_watchdog {
                             panic!("Choice: the parser wasn't LL1");
-                        }
-
-                        if stream.position() == position_watchdog + 1 {
-                            stream.before();
                         }
 
                         e
@@ -418,12 +401,8 @@ macro_rules! choice_parser {
                 $(
                     last = match $id.parse(stream) {
                         e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
-                            if stream.position() > position_watchdog + 1 {
+                            if stream.position() > position_watchdog {
                                 panic!("Choice: the parser wasn't LL1");
-                            }
-
-                            if stream.position() == position_watchdog + 1 {
-                                stream.before();
                             }
 
                             e
