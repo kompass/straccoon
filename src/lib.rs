@@ -133,68 +133,23 @@ macro_rules! byte_parser {
 }
 
 
-pub struct AlphaNum<S: Streamer>(PhantomData<S>);
-
-
-impl<S: Streamer> Parser for AlphaNum<S> {
-    type Input = S;
-
-    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
-        byte_parser!(alpha_num, is_alphanumeric).parse(stream)
-    }
+pub fn alpha_num<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+    byte_parser!(alpha_num, is_alphanumeric)
 }
 
 
-pub fn alpha_num<S: Streamer>() -> AlphaNum<S> {
-    AlphaNum(PhantomData)
+pub fn digit<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+    byte_parser!(digit, is_ascii_digit)
 }
 
 
-pub struct Digit<S: Streamer>(PhantomData<S>);
-
-impl<S: Streamer> Parser for Digit<S> {
-    type Input = S;
-
-    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
-        byte_parser!(digit, is_ascii_digit).parse(stream)
-    }
+pub fn letter<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+    byte_parser!(letter, is_alphabetic)
 }
 
 
-pub fn digit<S: Streamer>() -> Digit<S> {
-    Digit(PhantomData)
-}
-
-
-pub struct Letter<S: Streamer>(PhantomData<S>);
-
-impl<S: Streamer> Parser for Letter<S> {
-    type Input = S;
-
-    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
-        byte_parser!(letter, is_alphabetic).parse(stream)
-    }
-}
-
-
-pub fn letter<S: Streamer>() -> Letter<S> {
-    Letter(PhantomData)
-}
-
-
-pub struct Space<S: Streamer>(PhantomData<S>);
-
-impl<S: Streamer> Parser for Space<S> {
-    type Input = S;
-
-    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
-        byte_parser!(space, is_ascii_whitespace).parse(stream)
-    }
-}
-
-
-pub fn space<S: Streamer>() -> Space<S> {
-    Space(PhantomData)
+pub fn space<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+    byte_parser!(space, is_ascii_whitespace)
 }
 
 
