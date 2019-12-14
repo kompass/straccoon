@@ -95,10 +95,10 @@ pub trait Parser {
     }
 }
 
-pub struct Satisfy<S: Streamer, F: FnMut(u8) -> bool>(F, PhantomData<S>);
+pub struct Byte<S: Streamer, F: FnMut(u8) -> bool>(F, PhantomData<S>);
 
 
-impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Satisfy<S, F> {
+impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
     type Input = S;
 
     fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
@@ -118,37 +118,37 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Satisfy<S, F> {
 }
 
 
-pub fn satisfy<S: Streamer, F: FnMut(u8) -> bool>(predicate: F) -> Satisfy<S, F> {
-    Satisfy(predicate, PhantomData)
+pub fn byte<S: Streamer, F: FnMut(u8) -> bool>(predicate: F) -> Byte<S, F> {
+    Byte(predicate, PhantomData)
 }
 
 
 macro_rules! byte_parser {
     ($name:ident, $f: ident) => {{
-        satisfy(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f()).unwrap_or(false))
+        byte(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f()).unwrap_or(false))
     }};
     ($name:ident, $f: ident $($args:tt)+) => {{
-        satisfy(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f $($args)+).unwrap_or(false))
+        byte(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f $($args)+).unwrap_or(false))
     }};
 }
 
 
-pub fn alpha_num<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+pub fn alpha_num<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     byte_parser!(alpha_num, is_alphanumeric)
 }
 
 
-pub fn digit<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+pub fn digit<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     byte_parser!(digit, is_ascii_digit)
 }
 
 
-pub fn letter<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+pub fn letter<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     byte_parser!(letter, is_alphabetic)
 }
 
 
-pub fn space<S: Streamer>() -> Satisfy<S, impl FnMut(u8) -> bool> {
+pub fn space<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     byte_parser!(space, is_ascii_whitespace)
 }
 
