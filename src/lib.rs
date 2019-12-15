@@ -9,7 +9,7 @@ pub use elastic_buffer::ElasticBufferStreamer;
 pub enum StreamError {
     EndOfInput,
     BufferFull,
-    Other,
+    InputError(std::io::ErrorKind),
 }
 
 
@@ -17,7 +17,7 @@ impl std::convert::From<std::io::Error> for StreamError {
     fn from(stdio_error: std::io::Error) -> StreamError {
         match stdio_error.kind() {
             std::io::ErrorKind::UnexpectedEof => StreamError::EndOfInput,
-            _ => StreamError::Other,
+            e @ _ => StreamError::InputError(e),
         }
     }
 }
@@ -45,7 +45,8 @@ pub enum ParserErrorKind {
     Unexpected,
     UnexpectedEndOfInput,
     TooMany,
-    InputError(StreamError),
+    BufferFull,
+    InputError(std::io::ErrorKind),
 }
 
 
@@ -95,6 +96,33 @@ pub trait Parser {
     }
 }
 
+
+pub struct Eof<S: Streamer>(PhantomData<S>);
+
+
+impl<S: Streamer> Parser for Eof<S> {
+    type Input = S;
+
+    fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
+        match stream.next() {
+            Err(StreamError::EndOfInput) => Ok(()),
+            Ok(_) => {
+                stream.before();
+
+                Err(ParserError::Lazy(stream.position(), ParserErrorKind::Unexpected))
+            },
+            Err(StreamError::BufferFull) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::BufferFull)),
+            Err(StreamError::InputError(e)) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))
+        }
+    }
+}
+
+
+pub fn eof<S: Streamer>() -> Eof<S> {
+    Eof(PhantomData)
+}
+
+
 pub struct Byte<S: Streamer, F: FnMut(u8) -> bool>(F, PhantomData<S>);
 
 
@@ -111,8 +139,9 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
 
                 Err(ParserError::Lazy(unexpected_pos, ParserErrorKind::Unexpected))
             },
-
-            Err(e) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))
+            Err(StreamError::EndOfInput) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::UnexpectedEndOfInput)),
+            Err(StreamError::BufferFull) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::BufferFull)),
+            Err(StreamError::InputError(e)) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))
         }
     }
 }
@@ -467,6 +496,20 @@ mod tests {
     }
 
     #[test]
+    fn it_parses_eof() {
+        let fake_read = &b"A"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser1 = letter();
+
+        parser1.parse(&mut stream).unwrap();
+
+        let mut parser2 = eof();
+
+        assert!(parser2.parse(&mut stream).is_ok());
+    }
+
+    #[test]
     fn it_gets_parsed_range() {
         let fake_read = &b"This is the text !"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
@@ -476,6 +519,19 @@ mod tests {
         let rg = parser.get(&mut stream).unwrap();
 
         assert_eq!(rg, &(b"This")[..]);
+    }
+
+    #[test]
+    fn it_get_parsed_range_with_eof() {
+        let fake_read = &b"This"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = (many(alpha_num()), eof());
+
+        let rg = parser.get(&mut stream).unwrap();
+
+        assert_eq!(rg, &(b"This")[..]);
+
     }
 
     #[test]
