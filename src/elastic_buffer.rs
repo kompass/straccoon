@@ -221,7 +221,7 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
 
     fn position(&self) -> u64 {
         self.offset + self.cursor_pos as u64
-            
+
     }
 
 
@@ -268,9 +268,9 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
-    fn it_next_on_one_chunk() {
+    fn it_goes_next_on_one_chunk() {
         let fake_read = &b"This is the text !"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
         assert_eq!(stream.next(), Ok(b'T'));
@@ -292,7 +292,7 @@ mod tests {
 
 
     #[test]
-    fn it_next_on_multiple_chunks() {
+    fn it_goes_next_on_multiple_chunks() {
         let mut fake_read = String::with_capacity(CHUNK_SIZE * 3);
 
         let beautiful_sentence = "This is a sentence, what a beautiful sentence !";
@@ -394,7 +394,7 @@ mod tests {
 
 
     #[test]
-    fn it_free_useless_memory_when_reading_new_chunk() {
+    fn it_frees_useless_memory_when_reading_new_chunk() {
         let mut fake_read = String::with_capacity(CHUNK_SIZE * 3);
 
         let beautiful_sentence = "This is a sentence, what a beautiful sentence !";
