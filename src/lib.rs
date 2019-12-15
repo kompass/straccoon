@@ -152,7 +152,7 @@ pub fn byte<S: Streamer, F: FnMut(u8) -> bool>(predicate: F) -> Byte<S, F> {
 }
 
 
-macro_rules! byte_parser {
+macro_rules! ascii_predicate_parser {
     ($name:ident, $f: ident) => {{
         byte(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f()).unwrap_or(false))
     }};
@@ -163,22 +163,22 @@ macro_rules! byte_parser {
 
 
 pub fn alpha_num<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    byte_parser!(alpha_num, is_alphanumeric)
+    ascii_predicate_parser!(alpha_num, is_alphanumeric)
 }
 
 
 pub fn digit<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    byte_parser!(digit, is_ascii_digit)
+    ascii_predicate_parser!(digit, is_ascii_digit)
 }
 
 
 pub fn letter<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    byte_parser!(letter, is_alphabetic)
+    ascii_predicate_parser!(letter, is_alphabetic)
 }
 
 
 pub fn space<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    byte_parser!(space, is_ascii_whitespace)
+    ascii_predicate_parser!(space, is_ascii_whitespace)
 }
 
 
