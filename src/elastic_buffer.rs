@@ -3,10 +3,12 @@ use slice_deque::SliceDeque;
 use slice_of_array::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::io::Read;
+use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
 use super::Streamer;
 use super::StreamError;
+use super::StreamerRange;
 
 
 const ITEM_INDEX_SIZE: usize = 13;
@@ -83,6 +85,18 @@ impl CheckPointSet {
             let handled = cp.0.upgrade().unwrap(); // sub_offset has to be called right after min, so there is no unhandled value
             handled.set(handled.get() - value);
         }
+    }
+}
+
+
+pub struct Range<R: Read>(CheckPoint, CheckPoint, PhantomData<ElasticBufferStreamer<R>>);
+
+
+impl<R: Read> StreamerRange for Range<R> {
+    type Input = ElasticBufferStreamer<R>;
+
+    fn to_ref<'a>(self, stream: &'a mut ElasticBufferStreamer<R>) -> &'a [u8] {
+        (*stream).range_ref_from_to_checkpoint(self.0, self.1)
     }
 }
 
@@ -177,12 +191,21 @@ impl<R: Read> ElasticBufferStreamer<R> {
     pub fn buffer_len(&self) -> usize {
         self.buffer.len()
     }
+
+    fn range_ref_from_to_checkpoint(&mut self, from_cp: CheckPoint, to_cp: CheckPoint) -> &[u8] {
+        let range_begin = from_cp.inner();
+        let range_end = to_cp.inner();
+
+        let flat_slice = self.buffer.as_slice().flat();
+
+        &flat_slice[range_begin..range_end]
+    }
 }
 
 
 impl<R: Read> Streamer for ElasticBufferStreamer<R> {
-
     type CheckPoint = CheckPoint;
+    type Range = Range<R>;
 
     fn next(&mut self) -> Result<u8, StreamError> {
         assert!(self.chunk_index() <= self.buffer.len());
@@ -245,23 +268,10 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
     }
 
 
-    fn range_from_checkpoint(&mut self, cp: CheckPoint) -> &[u8] {
-        let range_begin = cp.inner();
-        let range_end = self.cursor_pos;
-
-        let flat_slice = self.buffer.as_slice().flat();
-
-        &flat_slice[range_begin..range_end]
+    fn range_from_to_checkpoint(&mut self, from_cp: CheckPoint, to_cp: CheckPoint) -> Range<R> {
+        Range(from_cp, to_cp, PhantomData)
     }
 
-    fn range_from_to_checkpoint(&mut self, from_cp: Self::CheckPoint, to_cp: Self::CheckPoint) -> &[u8] {
-        let range_begin = from_cp.inner();
-        let range_end = to_cp.inner();
-
-        let flat_slice = self.buffer.as_slice().flat();
-
-        &flat_slice[range_begin..range_end]
-    }
 }
 
 
@@ -445,11 +455,11 @@ mod tests {
             stream.next().unwrap();
         }
 
-        let rg1 = stream.range_from_checkpoint(cp1);
+        let rg1 = stream.range_from_checkpoint(cp1).to_ref(&mut stream);
 
         assert_eq!(rg1, &(b"This ")[..]);
 
-        let rg2 = stream.range_from_checkpoint(cp2);
+        let rg2 = stream.range_from_checkpoint(cp2).to_ref(&mut stream);
 
         assert_eq!(rg2, &(b"s ")[..]);
     }
@@ -473,7 +483,7 @@ mod tests {
             stream.next().unwrap();
         }
 
-        let rg = stream.range_from_checkpoint(cp);
+        let rg = stream.range_from_checkpoint(cp).to_ref(&mut stream);
 
         assert_eq!(rg.len(), number_of_sentences * beautiful_sentence.len());
     }
