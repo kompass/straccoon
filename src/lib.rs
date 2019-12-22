@@ -1,3 +1,17 @@
+//! This crate contains parser combinators optimized for streaming data.
+//! It can also be used to parse a huge amount of data which can't fit on RAM.
+//!
+//! It is largely inspired by `combine`, another parser combinators crate,
+//! but rethought specifically for streaming data.
+//!
+//! The two main features are streamers and parser combinators.
+//! The streamer handles the data source, ensuring that enough data is backed up.
+//! The main streamer, `ElasticBufferStreamer`, is based on the highly optimized ringbuffer
+//! from the crate `slice-deque`, and adapts its size dynamically following the demand.
+//!
+//! The parser combinators are functions which can be combined to form a more complex parser.
+//! They take their input from a streamer and creates output values on the fly from
+//! parsed tokens accessible by reference, copying only when needed.
 pub mod elastic_buffer;
 pub mod parsers;
 
@@ -29,21 +43,47 @@ pub trait StreamerRange{
 
 
 pub trait Streamer {
+    /// Type which represents a previous position from which one can return or which can mark the beginning or the end of a range
     type CheckPoint;
+
+    /// Type which represents a reference to a range of bytes from the input.
+    /// The streamer guarantees that the byte sequence will always be accessible as long as the Range and the Streamer exist. It's up to the streamer to decide how.
     type Range: StreamerRange;
 
+    /// Returns the next byte of the input according to position.
+    ///
+    /// # Errors
+    /// When the input encounters an error, when the buffer is full (even if the streamer can be dynamically sized, it can be decided that it has a maximum size),
+    /// or when we encounter end of input.
     fn next(&mut self) -> Result<u8, StreamError>;
+
+    /// Returns the current position in number of bytes since the beginning of the input.
     fn position(&self) -> u64;
+
+    /// Creates a checkpoint at the actual position and returns it. The Streamer guarantees we can return to that position or get a Range from that position
+    /// until the checkpoint is dropped.
     fn checkpoint(&self) -> Self::CheckPoint;
+
+    /// Consumes a checkpoint and set the Streamer position to the one referenced by the checkpoint.
     fn reset(&mut self, checkpoint: Self::CheckPoint);
-    // Like reset with a checkpoint one character before, but way faster.
-    // The Streamer must guarantee that it is always possible at least once after a next.
-    // If this method is called multiple times since the last next, it might panic.
-    // TODO : Make a proper documentation
+
+    /// Like reset with a checkpoint one character before, but can be way faster.
+    /// The Streamer must guarantee that it is always possible at least once after a next.
+    /// If this method is called multiple times since the last next, it might panic.
     fn before(&mut self);
+
+    /// Gets a Range from gived checkpoint to current position.
+    ///
+    /// # Panics
+    /// It panics when the given checkpoint points to a position after the current one's.
     fn range_from_checkpoint(&mut self, cp: Self::CheckPoint) -> Self::Range {
         self.range_from_to_checkpoint(cp, self.checkpoint())
     }
+
+    /// Gets a Range from the first give checkpoint to the second given one.
+    ///
+    /// # Panics
+    /// It panics when the first given checkpoint points to a position after the second one's.
     fn range_from_to_checkpoint(&mut self, from_cp: Self::CheckPoint, to_cp: Self::CheckPoint) -> Self::Range;
 }
 

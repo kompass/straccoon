@@ -269,6 +269,8 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
 
 
     fn range_from_to_checkpoint(&mut self, from_cp: CheckPoint, to_cp: CheckPoint) -> Range<R> {
+        assert!(from_cp.inner() <= to_cp.inner());
+
         Range(from_cp, to_cp, PhantomData)
     }
 
