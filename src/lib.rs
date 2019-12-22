@@ -80,7 +80,7 @@ pub trait Streamer {
         self.range_from_to_checkpoint(cp, self.checkpoint())
     }
 
-    /// Gets a Range from the first give checkpoint to the second given one.
+    /// Creates a Range from the first given checkpoint to the second given one.
     ///
     /// # Panics
     /// It panics when the first given checkpoint points to a position after the second one's.
@@ -115,11 +115,21 @@ pub enum ParserError {
 
 
 pub trait Parser {
+    /// The type of the streamer handling the data source.
     type Input: Streamer;
+
+    /// The type of the parsed data returned by `get()`.
     type Output;
 
+    /// Parses the input without returning any output.
+    /// After the call, if a sequence is parsed, `Ok(())` is returned and the position of the streamer is just
+    /// after the sequence parsed.
+    /// If the sequence failed to parse the sequence, an error is returned with the position where the error was encountered,
+    /// and the position of the streamer depends on the implementation.
     fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError>;
 
+    /// Parses the input and if it succeeds, returns a Range of the parsed sequence.
+    /// If it fails, acts like `parse()`.
     fn get_range(&mut self, stream: &mut Self::Input) -> Result<<Self::Input as Streamer>::Range, ParserError> {
         let cp = stream.checkpoint();
 
@@ -143,6 +153,8 @@ pub trait Parser {
         Ok(stream.range_from_to_checkpoint(from_cp, to_cp))
     }
 
+    /// Parses the input and if it succeeds, returns the parsed value of type `Self::Output`.
+    /// If it fails, acts like `parse()`.
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError>;
 }
 
