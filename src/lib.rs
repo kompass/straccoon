@@ -200,7 +200,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
     }
 
 
-    /// Applies the given parser as many times as possible (maybe zero times).
+    /// Applies the given parser as much as possible (maybe zero times).
     /// Returns an error only when the Streamer is encountering one.
     /// Otherwise, it returns a `Vec` containing all the outputs of the parser.
     ///
@@ -254,6 +254,21 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
     type Input = S;
     type Output = Vec<P::Output>;
 
+    /// Applies the parser as much as possible (maybe zero times) up to max_count times.
+    /// Returns an error when the Streamer is encountering one
+    /// or when the underlying parser can be applied too many times.
+    /// In this last case, the parser error is of kind `ParserErrorKind::TooMany`.
+    /// Otherwise, it succeeds returning a `Vec` containing all the outputs of the parser.
+    ///
+    /// # Warning
+    /// This parser doesn't let the Streamer in its initial position when it fails.
+    /// However, it fails only when the Streamer is encountering an error.
+    /// If you need the streamer to be in its initial position even when your Streamer
+    /// encounters an error, you should use `attempt`.
+    ///
+    /// # Panics
+    /// Panics when the underlying parser fails to parse but lets the streamer at another
+    /// position than the one before its call.
     fn get(&mut self, stream: &mut S) -> Result<Self::Output, ParserError> {
         let mut outputs = Vec::new();
 
@@ -281,6 +296,21 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
     }
 
 
+    /// Applies the parser as much as possible (maybe zero times) up to max_count times.
+    /// Returns an error when the Streamer is encountering one
+    /// or when the underlying parser can be applied too many times.
+    /// In this last case, the parser error is of kind `ParserErrorKind::TooMany`.
+    /// Otherwise, it succeeds returning `Ok(())`.
+    ///
+    /// # Warning
+    /// This parser doesn't let the Streamer in its initial position when it fails.
+    /// However, it fails only when the Streamer is encountering an error.
+    /// If you need the streamer to be in its initial position even when your Streamer
+    /// encounters an error, you should use `attempt`.
+    ///
+    /// # Panics
+    /// Panics when the underlying parser fails to parse but lets the streamer at another
+    /// position than the one before its call.
     fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         for _ in 0..self.1 {
             let position_watchdog = stream.position();
@@ -305,6 +335,8 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
 }
 
 
+/// Returns a combinator applying the given parser as much as possible (maybe zero times) up to `max_count` times and returning
+/// a `Vec` of the outputs.
 pub fn many_max<P>(parser: P, max_count: usize) -> ManyMax<P> {
     ManyMax(parser, max_count)
 }
