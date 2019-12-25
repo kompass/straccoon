@@ -1,9 +1,8 @@
-use crate::{Streamer, StreamerError, Parser, ParserError, ParserErrorKind};
-use std::marker::PhantomData;
+use crate::{Parser, ParserError, ParserErrorKind, Streamer, StreamerError};
 use ascii::AsciiChar;
+use std::marker::PhantomData;
 
 pub struct Eof<S: Streamer>(PhantomData<S>);
-
 
 impl<S: Streamer> Parser for Eof<S> {
     type Input = S;
@@ -16,25 +15,21 @@ impl<S: Streamer> Parser for Eof<S> {
                 stream.before();
 
                 Err(ParserError(stream.position(), ParserErrorKind::Unexpected))
-            },
+            }
             Err(streamer_error) => Err(ParserError(stream.position(), streamer_error.into())),
         }
     }
-
 
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         self.parse(stream)
     }
 }
 
-
 pub fn eof<S: Streamer>() -> Eof<S> {
     Eof(PhantomData)
 }
 
-
 pub struct Byte<S: Streamer, F: FnMut(u8) -> bool>(F, PhantomData<S>);
-
 
 impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
     type Input = S;
@@ -42,29 +37,28 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
 
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         match stream.next() {
-            Ok(c) => if (self.0)(c) {
-                Ok(c)
-            } else {
-                let unexpected_pos = stream.position();
-                stream.before();
+            Ok(c) => {
+                if (self.0)(c) {
+                    Ok(c)
+                } else {
+                    let unexpected_pos = stream.position();
+                    stream.before();
 
-                Err(ParserError(unexpected_pos, ParserErrorKind::Unexpected))
-            },
+                    Err(ParserError(unexpected_pos, ParserErrorKind::Unexpected))
+                }
+            }
             Err(streamer_error) => Err(ParserError(stream.position(), streamer_error.into())),
         }
     }
-
 
     fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         self.get(stream).map(|_| ())
     }
 }
 
-
 pub fn byte_predicate<S: Streamer, F: FnMut(u8) -> bool>(predicate: F) -> Byte<S, F> {
     Byte(predicate, PhantomData)
 }
-
 
 macro_rules! ascii_predicate_parser {
     ($name:ident, $f: ident) => {{
@@ -75,34 +69,27 @@ macro_rules! ascii_predicate_parser {
     }};
 }
 
-
 pub fn alpha_num<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     ascii_predicate_parser!(alpha_num, is_alphanumeric)
 }
-
 
 pub fn digit<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     ascii_predicate_parser!(digit, is_ascii_digit)
 }
 
-
 pub fn letter<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     ascii_predicate_parser!(letter, is_alphabetic)
 }
-
 
 pub fn space<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
     ascii_predicate_parser!(space, is_ascii_whitespace)
 }
 
-
 pub fn byte<S: Streamer>(b: u8) -> Byte<S, impl FnMut(u8) -> bool> {
     byte_predicate(move |c: u8| c == b)
 }
 
-
 pub struct Bytes<S: Streamer>(&'static [u8], PhantomData<S>);
-
 
 impl<S: Streamer> Parser for Bytes<S> {
     type Input = S;
@@ -118,24 +105,20 @@ impl<S: Streamer> Parser for Bytes<S> {
         Ok(())
     }
 
-
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         self.get_range(stream)
     }
 }
 
-
 pub fn bytes<S: Streamer>(range: &'static [u8]) -> Bytes<S> {
     Bytes(range, PhantomData)
 }
 
-
 #[cfg(test)]
 mod tests {
-    use crate::*;
-    use crate::elastic_buffer::ElasticBufferStreamer;
     use super::*;
-
+    use crate::elastic_buffer::ElasticBufferStreamer;
+    use crate::*;
 
     #[test]
     fn it_parses_a_precise_byte() {
@@ -147,7 +130,6 @@ mod tests {
         assert!(parser.parse(&mut stream).is_ok());
         assert_eq!(stream.position(), 1);
     }
-
 
     #[test]
     fn it_parses_alpha_num() {
@@ -165,7 +147,6 @@ mod tests {
         assert!(parser2.parse(&mut stream2).is_ok());
         assert_eq!(stream2.position(), 1);
     }
-
 
     #[test]
     fn it_parses_eof() {

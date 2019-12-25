@@ -24,7 +24,6 @@ pub enum StreamerError {
     InputError(std::io::ErrorKind),
 }
 
-
 impl std::convert::From<std::io::Error> for StreamerError {
     fn from(stdio_error: std::io::Error) -> StreamerError {
         match stdio_error.kind() {
@@ -34,13 +33,11 @@ impl std::convert::From<std::io::Error> for StreamerError {
     }
 }
 
-
-pub trait StreamerRange{
+pub trait StreamerRange {
     type Input: Streamer;
 
     fn to_ref<'a>(self, input: &'a mut Self::Input) -> &'a [u8];
 }
-
 
 pub trait Streamer {
     /// Type which represents a previous position from which one can return or which can mark the beginning or the end of a range
@@ -84,9 +81,12 @@ pub trait Streamer {
     ///
     /// # Panics
     /// It panics when the first given checkpoint points to a position after the second one's.
-    fn range_from_to_checkpoint(&mut self, from_cp: Self::CheckPoint, to_cp: Self::CheckPoint) -> Self::Range;
+    fn range_from_to_checkpoint(
+        &mut self,
+        from_cp: Self::CheckPoint,
+        to_cp: Self::CheckPoint,
+    ) -> Self::Range;
 }
-
 
 #[derive(Debug, PartialEq)]
 pub enum ParserErrorKind {
@@ -111,11 +111,10 @@ impl ParserErrorKind {
         match self {
             Self::BufferFull => true,
             Self::InputError(_) => true,
-            _ => false
+            _ => false,
         }
     }
 }
-
 
 impl std::convert::From<StreamerError> for ParserErrorKind {
     fn from(error: StreamerError) -> ParserErrorKind {
@@ -127,7 +126,6 @@ impl std::convert::From<StreamerError> for ParserErrorKind {
     }
 }
 
-
 #[derive(Debug, PartialEq)]
 pub struct ParserError(u64, ParserErrorKind);
 
@@ -136,7 +134,6 @@ impl ParserError {
         self.1.is_streamer_error_kind()
     }
 }
-
 
 pub trait Parser {
     /// The type of the streamer handling the data source.
@@ -154,7 +151,10 @@ pub trait Parser {
 
     /// Parses the input and if it succeeds, returns a Range of the parsed sequence.
     /// If it fails, acts like `parse()`.
-    fn get_range(&mut self, stream: &mut Self::Input) -> Result<<Self::Input as Streamer>::Range, ParserError> {
+    fn get_range(
+        &mut self,
+        stream: &mut Self::Input,
+    ) -> Result<<Self::Input as Streamer>::Range, ParserError> {
         let cp = stream.checkpoint();
 
         self.parse(stream)?;
@@ -162,8 +162,11 @@ pub trait Parser {
         Ok(stream.range_from_checkpoint(cp))
     }
 
-    fn get_between<'a, P: Parser<Input=Self::Input>>(&mut self, stream: &'a mut Self::Input, mut between: P) -> Result<<Self::Input as Streamer>::Range, ParserError>
-    {
+    fn get_between<'a, P: Parser<Input = Self::Input>>(
+        &mut self,
+        stream: &'a mut Self::Input,
+        mut between: P,
+    ) -> Result<<Self::Input as Streamer>::Range, ParserError> {
         between.parse(stream)?;
 
         let from_cp = stream.checkpoint();
@@ -182,10 +185,9 @@ pub trait Parser {
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError>;
 }
 
-
 pub struct Many<P>(P);
 
-impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
+impl<S: Streamer, P: Parser<Input = S>> Parser for Many<P> {
     type Input = S;
     type Output = Vec<P::Output>;
 
@@ -212,13 +214,12 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
                     }
 
                     break;
-                },
+                }
             }
         }
 
         Ok(())
     }
-
 
     /// Applies the given parser as much as possible (maybe zero times).
     /// Returns an error only when the Streamer is encountering one.
@@ -229,7 +230,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
     /// # Panics
     /// Panics when the underlying parser fails to parse but lets the streamer at another
     /// position than the one before its call.
-    fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError>  {
+    fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         let mut outputs = Vec::new();
 
         loop {
@@ -238,7 +239,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
             match self.0.get(stream) {
                 Ok(output) => {
                     outputs.push(output);
-                },
+                }
 
                 Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
 
@@ -248,7 +249,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
                     }
 
                     break;
-                },
+                }
             }
         }
 
@@ -256,17 +257,15 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
     }
 }
 
-
 /// Returns a combinator applying the given parser as many times as possible (maybe zero times) and returning
 /// a `Vec` of the outputs.
-pub fn many<S: Streamer, P: Parser<Input=S>>(parser: P) -> Many<P> {
+pub fn many<S: Streamer, P: Parser<Input = S>>(parser: P) -> Many<P> {
     Many(parser)
 }
 
-
 pub struct ManyMax<P>(P, usize);
 
-impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
+impl<S: Streamer, P: Parser<Input = S>> Parser for ManyMax<P> {
     type Input = S;
     type Output = Vec<P::Output>;
 
@@ -290,7 +289,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
             match self.0.get(stream) {
                 Ok(output) => {
                     outputs.push(output);
-                },
+                }
 
                 Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
 
@@ -300,13 +299,12 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
                     }
 
                     return Ok(outputs);
-                },
+                }
             }
         }
 
         Err(ParserError(stream.position(), ParserErrorKind::TooMany))
     }
-
 
     /// Applies the parser as much as possible (maybe zero times) up to max_count times.
     /// Returns an error when the Streamer is encountering one
@@ -333,7 +331,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
                     }
 
                     return Ok(());
-                },
+                }
             }
         }
 
@@ -341,17 +339,15 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
     }
 }
 
-
 /// Returns a combinator applying the given parser as much as possible (maybe zero times) up to `max_count` times and returning
 /// a `Vec` of the outputs.
 pub fn many_max<P>(parser: P, max_count: usize) -> ManyMax<P> {
     ManyMax(parser, max_count)
 }
 
-
 pub struct Attempt<P>(P);
 
-impl<S: Streamer, P: Parser<Input=S>> Parser for Attempt<P> {
+impl<S: Streamer, P: Parser<Input = S>> Parser for Attempt<P> {
     type Input = S;
     type Output = P::Output;
 
@@ -370,7 +366,6 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Attempt<P> {
         parse_status
     }
 
-
     /// Try to apply the underlying parser. If it fails, it ensures that the Streamer has returned to its original position.
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         let cp = stream.checkpoint();
@@ -387,11 +382,9 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Attempt<P> {
     }
 }
 
-
-pub fn attempt<S: Streamer, P: Parser<Input=S>>(parser: P) -> Attempt<P> {
+pub fn attempt<S: Streamer, P: Parser<Input = S>>(parser: P) -> Attempt<P> {
     Attempt(parser)
 }
-
 
 macro_rules! tuple_parser {
     ($fid: ident $(, $id: ident)*) => {
@@ -430,7 +423,6 @@ macro_rules! tuple_parser {
     }
 }
 
-
 tuple_parser!(A);
 tuple_parser!(A, B);
 tuple_parser!(A, B, C);
@@ -446,10 +438,9 @@ tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L);
 tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 tuple_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 
-
 pub struct Maybe<P>(P);
 
-impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
+impl<S: Streamer, P: Parser<Input = S>> Parser for Maybe<P> {
     type Input = S;
     type Output = Option<P::Output>;
 
@@ -467,10 +458,9 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
                 }
 
                 Ok(())
-            },
+            }
         }
     }
-
 
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         let position_watchdog = stream.position();
@@ -486,16 +476,14 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
                 }
 
                 Ok(None)
-            },
+            }
         }
     }
 }
 
-
 pub fn maybe<P: Parser>(parser: P) -> Maybe<P> {
     Maybe(parser)
 }
-
 
 pub trait ChoiceParser {
     type Input: Streamer;
@@ -504,7 +492,6 @@ pub trait ChoiceParser {
     fn choice_parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError>;
     fn choice_get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError>;
 }
-
 
 macro_rules! choice_parser {
     ($fid: ident $(, $id: ident)*) => {
@@ -602,7 +589,6 @@ macro_rules! choice_parser {
     }
 }
 
-
 choice_parser!(A);
 choice_parser!(A, B);
 choice_parser!(A, B, C);
@@ -617,7 +603,6 @@ choice_parser!(A, B, C, D, E, F, G, H, I, J, K, L);
 choice_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M);
 choice_parser!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 
-
 pub struct Choice<C>(C);
 
 impl<C: ChoiceParser> Parser for Choice<C> {
@@ -628,24 +613,20 @@ impl<C: ChoiceParser> Parser for Choice<C> {
         self.0.choice_parse(stream)
     }
 
-
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         self.0.choice_get(stream)
     }
 }
 
-
 pub fn choice<C: ChoiceParser>(parsers: C) -> Choice<C> {
     Choice(parsers)
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::elastic_buffer::ElasticBufferStreamer;
     use super::parsers::basic::*;
-
+    use super::*;
 
     #[test]
     fn it_gets_parsed_range() {
@@ -659,7 +640,6 @@ mod tests {
         assert_eq!(rg, &(b"This")[..]);
     }
 
-
     #[test]
     fn it_gets_a_precise_range() {
         let fake_read = &b"This is the text !"[..];
@@ -672,7 +652,6 @@ mod tests {
         assert_eq!(rg, &(b"This")[..]);
     }
 
-
     #[test]
     fn it_get_parsed_range_with_eof() {
         let fake_read = &b"This"[..];
@@ -683,9 +662,7 @@ mod tests {
         let rg = parser.get_range(&mut stream).unwrap().to_ref(&mut stream);
 
         assert_eq!(rg, &(b"This")[..]);
-
     }
-
 
     #[test]
     fn it_gets_range_between_delimiters() {
@@ -695,11 +672,13 @@ mod tests {
         let mut parser = (letter(), letter());
         let delimiter = letter();
 
-        let rg = parser.get_between(&mut stream, delimiter).unwrap().to_ref(&mut stream);
+        let rg = parser
+            .get_between(&mut stream, delimiter)
+            .unwrap()
+            .to_ref(&mut stream);
 
         assert_eq!(rg, &(b"hi")[..]);
     }
-
 
     #[test]
     fn it_get_parsed_range_with_max_size() {
@@ -714,9 +693,11 @@ mod tests {
 
         stream.next().unwrap();
 
-        assert_eq!(parser.get(&mut stream), Err(ParserError(9, ParserErrorKind::TooMany)));
+        assert_eq!(
+            parser.get(&mut stream),
+            Err(ParserError(9, ParserErrorKind::TooMany))
+        );
     }
-
 
     #[test]
     fn it_merges_parser_sequences() {
@@ -744,18 +725,22 @@ mod tests {
         assert_eq!(rg, &(b"Thi")[..]);
     }
 
-
     #[test]
     fn it_recovers_on_failed_attempts() {
         let fake_read = &b"This is the text !"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
-        let mut parser = many(attempt((alpha_num(), alpha_num(), alpha_num(), alpha_num(), space())));
+        let mut parser = many(attempt((
+            alpha_num(),
+            alpha_num(),
+            alpha_num(),
+            alpha_num(),
+            space(),
+        )));
 
         let rg = parser.get_range(&mut stream).unwrap().to_ref(&mut stream);
         assert_eq!(rg, &(b"This ")[..]);
     }
-
 
     #[test]
     fn it_parses_maybe() {
@@ -771,7 +756,6 @@ mod tests {
         let rg2 = parser.get_range(&mut stream2).unwrap().to_ref(&mut stream2);
         assert_eq!(rg2, &(b" i")[..]);
     }
-
 
     #[test]
     fn it_chooses_the_good_parser() {
@@ -800,6 +784,5 @@ mod tests {
 
         let rg3 = parser3.get_range(&mut stream).unwrap().to_ref(&mut stream);
         assert_eq!(rg3, &(b"T")[..]);
-
     }
 }

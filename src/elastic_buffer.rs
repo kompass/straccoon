@@ -10,7 +10,6 @@ use super::Streamer;
 use super::StreamerError;
 use super::StreamerRange;
 
-
 const ITEM_INDEX_SIZE: usize = 13;
 const ITEM_INDEX_MASK: usize = (1 << ITEM_INDEX_SIZE) - 1;
 pub const CHUNK_SIZE: usize = 1 << ITEM_INDEX_SIZE;
@@ -25,7 +24,6 @@ impl CheckPoint {
     fn new(pos: usize) -> CheckPoint {
         CheckPoint(Rc::new(Cell::new(pos)))
     }
-
 
     fn inner(&self) -> usize {
         self.0.get()
@@ -49,7 +47,6 @@ impl CheckPointSet {
         CheckPointSet(RefCell::new(Vec::new()))
     }
 
-
     fn insert(&self, pos: usize) -> CheckPoint {
         let cp = CheckPoint::new(pos);
         self.0
@@ -58,7 +55,6 @@ impl CheckPointSet {
 
         cp
     }
-
 
     fn min_checkpoint_position(&self) -> Option<usize> {
         let mut min: Option<usize> = None;
@@ -79,7 +75,6 @@ impl CheckPointSet {
         min
     }
 
-
     fn sub_offset(&self, value: usize) {
         for cp in self.0.borrow().iter() {
             let handled = cp.0.upgrade().unwrap(); // sub_offset has to be called right after min, so there is no unhandled value
@@ -88,9 +83,11 @@ impl CheckPointSet {
     }
 }
 
-
-pub struct Range<R: Read>(CheckPoint, CheckPoint, PhantomData<ElasticBufferStreamer<R>>);
-
+pub struct Range<R: Read>(
+    CheckPoint,
+    CheckPoint,
+    PhantomData<ElasticBufferStreamer<R>>,
+);
 
 impl<R: Read> StreamerRange for Range<R> {
     type Input = ElasticBufferStreamer<R>;
@@ -99,7 +96,6 @@ impl<R: Read> StreamerRange for Range<R> {
         (*stream).range_ref_from_to_checkpoint(self.0, self.1)
     }
 }
-
 
 fn read_exact_or_eof<R: Read>(
     reader: &mut R,
@@ -119,7 +115,6 @@ fn read_exact_or_eof<R: Read>(
 
     Ok(NonZeroUsize::new(chunk.len()))
 }
-
 
 pub struct ElasticBufferStreamer<R: Read> {
     raw_read: R,
@@ -146,11 +141,9 @@ impl<R: Read> ElasticBufferStreamer<R> {
         }
     }
 
-
     pub fn unlimited(read: R) -> Self {
         Self::with_maybe_max_size(read, None)
     }
-
 
     pub fn with_max_size(read: R, max_size: usize) -> Self {
         let max_buffer_size = if max_size % CHUNK_SIZE != 0 {
@@ -162,16 +155,13 @@ impl<R: Read> ElasticBufferStreamer<R> {
         Self::with_maybe_max_size(read, Some(max_buffer_size))
     }
 
-
     fn chunk_index(&self) -> usize {
         self.cursor_pos >> ITEM_INDEX_SIZE
     }
 
-
     fn item_index(&self) -> usize {
         self.cursor_pos & ITEM_INDEX_MASK
     }
-
 
     fn free_useless_chunks(&mut self) {
         let checkpoint_pos_min = self.checkpoints.min_checkpoint_position();
@@ -187,7 +177,6 @@ impl<R: Read> ElasticBufferStreamer<R> {
         self.checkpoints.sub_offset(offset_delta);
     }
 
-
     pub fn buffer_len(&self) -> usize {
         self.buffer.len()
     }
@@ -201,7 +190,6 @@ impl<R: Read> ElasticBufferStreamer<R> {
         &flat_slice[range_begin..range_end]
     }
 }
-
 
 impl<R: Read> Streamer for ElasticBufferStreamer<R> {
     type CheckPoint = CheckPoint;
@@ -241,22 +229,17 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
         Ok(item)
     }
 
-
     fn position(&self) -> u64 {
         self.offset + self.cursor_pos as u64
-
     }
-
 
     fn checkpoint(&self) -> CheckPoint {
         self.checkpoints.insert(self.cursor_pos)
     }
 
-
     fn reset(&mut self, checkpoint: CheckPoint) {
         self.cursor_pos = checkpoint.inner();
     }
-
 
     fn before(&mut self) {
         if self.before_watchdog {
@@ -267,15 +250,12 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
         }
     }
 
-
     fn range_from_to_checkpoint(&mut self, from_cp: CheckPoint, to_cp: CheckPoint) -> Range<R> {
         assert!(from_cp.inner() <= to_cp.inner());
 
         Range(from_cp, to_cp, PhantomData)
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -296,12 +276,8 @@ mod tests {
         }
 
         assert_eq!(stream.next(), Ok(b'!'));
-        assert_eq!(
-            stream.next(),
-            Err(StreamerError::EndOfInput)
-        );
+        assert_eq!(stream.next(), Err(StreamerError::EndOfInput));
     }
-
 
     #[test]
     fn it_goes_next_on_multiple_chunks() {
@@ -347,12 +323,8 @@ mod tests {
         }
 
         assert_eq!(stream.next(), Ok(b'!'));
-        assert_eq!(
-            stream.next(),
-            Err(StreamerError::EndOfInput)
-        );
+        assert_eq!(stream.next(), Err(StreamerError::EndOfInput));
     }
-
 
     #[test]
     fn it_resets_on_checkpoint() {
@@ -404,7 +376,6 @@ mod tests {
         assert_eq!(stream.next(), Ok(b' '));
     }
 
-
     #[test]
     fn it_frees_useless_memory_when_reading_new_chunk() {
         let mut fake_read = String::with_capacity(CHUNK_SIZE * 3);
@@ -438,7 +409,6 @@ mod tests {
 
         assert_eq!(stream.buffer_len(), 1);
     }
-
 
     #[test]
     fn it_gets_ranges() {
