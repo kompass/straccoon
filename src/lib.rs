@@ -18,18 +18,18 @@ pub mod parsers;
 pub use elastic_buffer::ElasticBufferStreamer;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum StreamError {
+pub enum StreamerError {
     EndOfInput,
     BufferFull,
     InputError(std::io::ErrorKind),
 }
 
 
-impl std::convert::From<std::io::Error> for StreamError {
-    fn from(stdio_error: std::io::Error) -> StreamError {
+impl std::convert::From<std::io::Error> for StreamerError {
+    fn from(stdio_error: std::io::Error) -> StreamerError {
         match stdio_error.kind() {
-            std::io::ErrorKind::UnexpectedEof => StreamError::EndOfInput,
-            e @ _ => StreamError::InputError(e),
+            std::io::ErrorKind::UnexpectedEof => StreamerError::EndOfInput,
+            e @ _ => StreamerError::InputError(e),
         }
     }
 }
@@ -55,7 +55,7 @@ pub trait Streamer {
     /// # Errors
     /// When the input encounters an error, when the buffer is full (even if the streamer can be dynamically sized, it can be decided that it has a maximum size),
     /// or when we encounter end of input.
-    fn next(&mut self) -> Result<u8, StreamError>;
+    fn next(&mut self) -> Result<u8, StreamerError>;
 
     /// Returns the current position in number of bytes since the beginning of the input.
     fn position(&self) -> u64;
@@ -90,27 +90,51 @@ pub trait Streamer {
 
 #[derive(Debug, PartialEq)]
 pub enum ParserErrorKind {
+    /// Occurs when the parser encounter an unexpected error and can't parse.
     Unexpected,
+
+    /// Occurs when the stream is done but the parser hasn't finished to parse.
     UnexpectedEndOfInput,
+
+    /// Occurs when a parser can parse too many times a sequence.
     TooMany,
+
+    /// Occurs when the buffer of the Streamer is full.
     BufferFull,
+
+    /// Occurs when the Streamer encountered an `StreamerError::InputError`.
     InputError(std::io::ErrorKind),
 }
 
+impl ParserErrorKind {
+    pub fn is_streamer_error_kind(&self) -> bool {
+        match self {
+            Self::BufferFull => true,
+            Self::InputError(_) => true,
+            _ => false
+        }
+    }
+}
 
-#[derive(Debug, PartialEq)]
-pub enum ParserErrorInfo {
-    Unexpected(u8), // TODO: explicit more the unexpected and expected data type (contains end-of-input)
-    Expected(u8),
-    Info(String),
-    InputError(StreamError), // Other than end-of-input
+
+impl std::convert::From<StreamerError> for ParserErrorKind {
+    fn from(error: StreamerError) -> ParserErrorKind {
+        match error {
+            StreamerError::InputError(e) => ParserErrorKind::InputError(e),
+            StreamerError::BufferFull => ParserErrorKind::BufferFull,
+            StreamerError::EndOfInput => ParserErrorKind::UnexpectedEndOfInput,
+        }
+    }
 }
 
 
 #[derive(Debug, PartialEq)]
-pub enum ParserError {
-    Lazy(u64, ParserErrorKind),
-    Detailed(u64, Vec<ParserErrorInfo>),
+pub struct ParserError(u64, ParserErrorKind);
+
+impl ParserError {
+    pub fn is_streamer_error(&self) -> bool {
+        self.1.is_streamer_error_kind()
+    }
 }
 
 
@@ -168,11 +192,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
     /// Applies the given parser as many times as possible (maybe zero times).
     /// Returns an error only when the Streamer is encountering one.
     ///
-    /// # Warning
-    /// This parser doesn't let the Streamer in its initial position when it fails.
-    /// However, it fails only when the Streamer is encountering an error.
-    /// If you need the streamer to be in its initial position even when your Streamer
-    /// encounters an error, you should use `attempt`.
+    /// It can only fail when the Streamer is encountering an error.
     ///
     /// # Panics
     /// Panics when the underlying parser fails to parse but lets the streamer at another
@@ -184,15 +204,15 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
             match self.0.parse(stream) {
                 Ok(_) => continue,
 
-                Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
+                Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                Err(_) => {
                     if stream.position() != position_watchdog {
                         panic!("Many: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                     }
 
                     break;
                 },
-
-                e @ Err(_) => return e,
             }
         }
 
@@ -204,11 +224,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
     /// Returns an error only when the Streamer is encountering one.
     /// Otherwise, it returns a `Vec` containing all the outputs of the parser.
     ///
-    /// # Warning
-    /// This parser doesn't let the Streamer in its initial position when it fails.
-    /// However, it fails only when the Streamer is encountering an error.
-    /// If you need the streamer to be in its initial position even when your Streamer
-    /// encounters an error, you should use `attempt`.
+    /// It can only fail when the Streamer is encountering an error.
     ///
     /// # Panics
     /// Panics when the underlying parser fails to parse but lets the streamer at another
@@ -224,15 +240,15 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Many<P> {
                     outputs.push(output);
                 },
 
-                Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
+                Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                Err(_) => {
                     if stream.position() != position_watchdog {
                         panic!("Many: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                     }
 
                     break;
                 },
-
-                Err(e @ _) => return Err(e),
             }
         }
 
@@ -260,11 +276,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
     /// In this last case, the parser error is of kind `ParserErrorKind::TooMany`.
     /// Otherwise, it succeeds returning a `Vec` containing all the outputs of the parser.
     ///
-    /// # Warning
-    /// This parser doesn't let the Streamer in its initial position when it fails.
-    /// However, it fails only when the Streamer is encountering an error.
-    /// If you need the streamer to be in its initial position even when your Streamer
-    /// encounters an error, you should use `attempt`.
+    /// It can only fail when the Streamer is encountering an error.
     ///
     /// # Panics
     /// Panics when the underlying parser fails to parse but lets the streamer at another
@@ -280,19 +292,19 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
                     outputs.push(output);
                 },
 
-                Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput))=> {
+                Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                Err(_) => {
                     if stream.position() != position_watchdog {
                         panic!("ManyMax: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                     }
 
                     return Ok(outputs);
                 },
-
-                Err(e @ _) => return Err(e),
             }
         }
 
-        Err(ParserError::Lazy(stream.position(), ParserErrorKind::TooMany))
+        Err(ParserError(stream.position(), ParserErrorKind::TooMany))
     }
 
 
@@ -302,11 +314,7 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
     /// In this last case, the parser error is of kind `ParserErrorKind::TooMany`.
     /// Otherwise, it succeeds returning `Ok(())`.
     ///
-    /// # Warning
-    /// This parser doesn't let the Streamer in its initial position when it fails.
-    /// However, it fails only when the Streamer is encountering an error.
-    /// If you need the streamer to be in its initial position even when your Streamer
-    /// encounters an error, you should use `attempt`.
+    /// It can only fail when the Streamer is encountering an error.
     ///
     /// # Panics
     /// Panics when the underlying parser fails to parse but lets the streamer at another
@@ -318,19 +326,18 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for ManyMax<P> {
             match self.0.parse(stream) {
                 Ok(_) => continue,
 
-                Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput))=> {
+                Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+                Err(_) => {
                     if stream.position() != position_watchdog {
                         panic!("ManyMax: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                     }
 
                     return Ok(());
                 },
-
-                e @ Err(_) => return e,
             }
         }
 
-        Err(ParserError::Lazy(stream.position(), ParserErrorKind::TooMany))
+        Err(ParserError(stream.position(), ParserErrorKind::TooMany))
     }
 }
 
@@ -348,32 +355,32 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Attempt<P> {
     type Input = S;
     type Output = P::Output;
 
+    /// Try to apply the underlying parser. If it fails, it ensures that the Streamer has returned to its original position.
     fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
         let cp = stream.checkpoint();
 
         let parse_status = self.0.parse(stream);
 
-        match parse_status {
-            Err(ParserError::Lazy(_, ref kind)) if kind == &ParserErrorKind::Unexpected || kind == &ParserErrorKind::UnexpectedEndOfInput => {
+        if let Err(ref parser_error) = parse_status {
+            if !parser_error.is_streamer_error() {
                 stream.reset(cp);
-            },
-            _ => ()
+            }
         }
 
         parse_status
     }
 
 
+    /// Try to apply the underlying parser. If it fails, it ensures that the Streamer has returned to its original position.
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         let cp = stream.checkpoint();
 
         let parse_status = self.0.get(stream);
 
-        match parse_status {
-            Err(ParserError::Lazy(_, ref kind)) if kind == &ParserErrorKind::Unexpected || kind == &ParserErrorKind::UnexpectedEndOfInput => {
+        if let Err(ref parser_error) = parse_status {
+            if !parser_error.is_streamer_error() {
                 stream.reset(cp);
-            },
-            _ => ()
+            }
         }
 
         parse_status
@@ -450,15 +457,17 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
         let position_watchdog = stream.position();
 
         match self.0.parse(stream) {
-            Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
+            Ok(()) => Ok(()),
+
+            Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+            Err(_) => {
                 if stream.position() != position_watchdog {
                     panic!("Maybe: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                 }
 
                 Ok(())
             },
-
-            e @ _ => e,
         }
     }
 
@@ -467,15 +476,17 @@ impl<S: Streamer, P: Parser<Input=S>> Parser for Maybe<P> {
         let position_watchdog = stream.position();
 
         match self.0.get(stream) {
-            Err(ParserError::Lazy(_, kind)) if kind == ParserErrorKind::Unexpected || kind == ParserErrorKind::UnexpectedEndOfInput => {
+            Ok(output) => Ok(Some(output)),
+
+            Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+            Err(_) => {
                 if stream.position() != position_watchdog {
                     panic!("Maybe: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                 }
 
                 Ok(None)
             },
-
-            e @ _ => e.map(|output| Some(output)),
         }
     }
 }
@@ -513,27 +524,33 @@ macro_rules! choice_parser {
                 let position_watchdog = stream.position();
 
                 let mut last = match $fid.parse(stream) {
-                    e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                    Ok(()) => return Ok(()),
+
+                    Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                    Err(parser_error) => {
                         if stream.position() != position_watchdog {
                             panic!("Choice: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                         }
 
-                        e
+                        Err(parser_error)
                     },
-                    e @ _ => return e,
                 };
 
 
                 $(
                     last = match $id.parse(stream) {
-                        e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                        Ok(()) => return Ok(()),
+
+                        Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                        Err(parser_error) => {
                             if stream.position() != position_watchdog {
                                 panic!("Choice: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                             }
 
-                            e
+                            Err(parser_error)
                         },
-                        e @ _ => return e,
                     };
 
                 )*
@@ -548,27 +565,33 @@ macro_rules! choice_parser {
                 let position_watchdog = stream.position();
 
                 let mut last = match $fid.get(stream) {
-                    e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                    Ok(output) => return Ok(output),
+
+                    Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                    Err(parser_error) => {
                         if stream.position() != position_watchdog {
                             panic!("Choice: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                         }
 
-                        e
+                        Err(parser_error)
                     },
-                    e @ _ => return e,
                 };
 
 
                 $(
                     last = match $id.get(stream) {
-                        e @ Err(ParserError::Lazy(_, ParserErrorKind::Unexpected)) | e @ Err(ParserError::Lazy(_, ParserErrorKind::UnexpectedEndOfInput)) => {
+                        Ok(output) => return Ok(output),
+
+                        Err(parser_error) if parser_error.is_streamer_error() => return Err(parser_error),
+
+                        Err(parser_error) => {
                             if stream.position() != position_watchdog {
                                 panic!("Choice: the underlying parser failed to another position than the one before its call. Maybe you should use `attempt`.");
                             }
 
-                            e
+                            Err(parser_error)
                         },
-                        e @ _ => return e,
                     };
 
                 )*
@@ -691,7 +714,7 @@ mod tests {
 
         stream.next().unwrap();
 
-        assert_eq!(parser.get(&mut stream), Err(ParserError::Lazy(9, ParserErrorKind::TooMany)));
+        assert_eq!(parser.get(&mut stream), Err(ParserError(9, ParserErrorKind::TooMany)));
     }
 
 

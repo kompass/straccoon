@@ -1,4 +1,4 @@
-use crate::{Streamer, StreamError, Parser, ParserError, ParserErrorKind};
+use crate::{Streamer, StreamerError, Parser, ParserError, ParserErrorKind};
 use std::marker::PhantomData;
 use ascii::AsciiChar;
 
@@ -11,14 +11,13 @@ impl<S: Streamer> Parser for Eof<S> {
 
     fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         match stream.next() {
-            Err(StreamError::EndOfInput) => Ok(()),
+            Err(StreamerError::EndOfInput) => Ok(()),
             Ok(_) => {
                 stream.before();
 
-                Err(ParserError::Lazy(stream.position(), ParserErrorKind::Unexpected))
+                Err(ParserError(stream.position(), ParserErrorKind::Unexpected))
             },
-            Err(StreamError::BufferFull) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::BufferFull)),
-            Err(StreamError::InputError(e)) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))
+            Err(streamer_error) => Err(ParserError(stream.position(), streamer_error.into())),
         }
     }
 
@@ -49,11 +48,9 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
                 let unexpected_pos = stream.position();
                 stream.before();
 
-                Err(ParserError::Lazy(unexpected_pos, ParserErrorKind::Unexpected))
+                Err(ParserError(unexpected_pos, ParserErrorKind::Unexpected))
             },
-            Err(StreamError::EndOfInput) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::UnexpectedEndOfInput)),
-            Err(StreamError::BufferFull) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::BufferFull)),
-            Err(StreamError::InputError(e)) => Err(ParserError::Lazy(stream.position(), ParserErrorKind::InputError(e)))
+            Err(streamer_error) => Err(ParserError(stream.position(), streamer_error.into())),
         }
     }
 

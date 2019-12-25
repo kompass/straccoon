@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
 use super::Streamer;
-use super::StreamError;
+use super::StreamerError;
 use super::StreamerRange;
 
 
@@ -207,7 +207,7 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
     type CheckPoint = CheckPoint;
     type Range = Range<R>;
 
-    fn next(&mut self) -> Result<u8, StreamError> {
+    fn next(&mut self) -> Result<u8, StreamerError> {
         assert!(self.chunk_index() <= self.buffer.len());
 
         self.before_watchdog = false;
@@ -218,7 +218,7 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
 
             if let Some(max_size) = self.max_size {
                 if self.buffer.len() >= max_size {
-                    return Err(StreamError::BufferFull);
+                    return Err(StreamerError::BufferFull);
                 }
             }
 
@@ -229,7 +229,7 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
         if self.chunk_index() == self.buffer.len() - 1 {
             if let Some(eof_pos_from_right) = self.eof {
                 if self.item_index() >= CHUNK_SIZE - eof_pos_from_right.get() {
-                    return Err(StreamError::EndOfInput);
+                    return Err(StreamerError::EndOfInput);
                 }
             }
         }
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(stream.next(), Ok(b'!'));
         assert_eq!(
             stream.next(),
-            Err(StreamError::EndOfInput)
+            Err(StreamerError::EndOfInput)
         );
     }
 
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(stream.next(), Ok(b'!'));
         assert_eq!(
             stream.next(),
-            Err(StreamError::EndOfInput)
+            Err(StreamerError::EndOfInput)
         );
     }
 
