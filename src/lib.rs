@@ -135,7 +135,7 @@ impl ParserError {
     }
 }
 
-pub trait Parser {
+pub trait Parser: Sized {
     /// The type of the streamer handling the data source.
     type Input: Streamer;
 
@@ -183,6 +183,25 @@ pub trait Parser {
     /// Parses the input and if it succeeds, returns the parsed value of type `Self::Output`.
     /// If it fails, acts like `parse()`.
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError>;
+
+    fn map<O, F: Fn(Self::Output) -> Result<O, ParserError>>(self, mapper: F) -> Map<Self, O, F> {
+        Map(self, mapper)
+    }
+}
+
+pub struct Map<P: Parser, O, F: Fn(P::Output) -> Result<O, ParserError>> (P, F);
+
+impl<P: Parser, O, F: Fn(P::Output)-> Result<O, ParserError>> Parser for Map<P, O, F> {
+    type Input = P::Input;
+    type Output = O;
+
+    fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
+        self.0.parse(stream)
+    }
+
+    fn get(&mut self, stream: &mut Self::Input) -> Result<O, ParserError> {
+        self.1(self.0.get(stream)?)
+    }
 }
 
 pub struct Many<P>(P);
