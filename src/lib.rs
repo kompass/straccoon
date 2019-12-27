@@ -382,6 +382,7 @@ impl<S: Streamer, P: Parser<Input = S>> Parser for Attempt<P> {
     }
 }
 
+// Wraps a parser to ensure it will let the streamer output to initial position if it fails
 pub fn attempt<S: Streamer, P: Parser<Input = S>>(parser: P) -> Attempt<P> {
     Attempt(parser)
 }
@@ -444,6 +445,7 @@ impl<S: Streamer, P: Parser<Input = S>> Parser for Maybe<P> {
     type Input = S;
     type Output = Option<P::Output>;
 
+    // Tries to apply a parser, succeeds even if the underlaying parser fails.
     fn parse(&mut self, stream: &mut Self::Input) -> Result<(), ParserError> {
         let position_watchdog = stream.position();
 
@@ -462,6 +464,7 @@ impl<S: Streamer, P: Parser<Input = S>> Parser for Maybe<P> {
         }
     }
 
+    // Tries to apply a parser, succeeds even if the underlaying parser fails.
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         let position_watchdog = stream.position();
 
@@ -481,6 +484,7 @@ impl<S: Streamer, P: Parser<Input = S>> Parser for Maybe<P> {
     }
 }
 
+// Tries to apply a parser, succeeds even if the underlaying parser fails.
 pub fn maybe<P: Parser>(parser: P) -> Maybe<P> {
     Maybe(parser)
 }
