@@ -89,6 +89,14 @@ pub fn byte<S: Streamer>(b: u8) -> Byte<S, impl FnMut(u8) -> bool> {
     byte_predicate(move |c: u8| c == b)
 }
 
+pub fn one_of<S: Streamer>(bytes: Vec<u8>) -> Byte<S, impl FnMut(u8) -> bool> { // TODO : use array of any size when it will be possible.
+    byte_predicate(move |c: u8| bytes.iter().any(|&b| c == b))
+}
+
+pub fn none_of<S: Streamer>(bytes: Vec<u8>) -> Byte<S, impl FnMut(u8) -> bool> {
+    byte_predicate(move |c: u8| bytes.iter().all(|&b| c != b))
+}
+
 pub struct Bytes<S: Streamer>(&'static [u8], PhantomData<S>);
 
 impl<S: Streamer> Parser for Bytes<S> {
