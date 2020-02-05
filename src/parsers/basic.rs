@@ -169,4 +169,26 @@ mod tests {
 
         assert!(parser2.parse(&mut stream).is_ok());
     }
+
+    #[test]
+    fn it_parses_one_of() {
+        let fake_read = &b"Bounga"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = one_of(vec![b'a', b'B', b')']);
+
+        assert!(parser.parse(&mut stream).is_ok());
+        assert!(parser.parse(&mut stream).is_err());
+    }
+
+    #[test]
+    fn it_parses_none_of() {
+        let fake_read = &b"Bounga"[..];
+        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
+
+        let mut parser = none_of(vec![b'a', b'o', b')']);
+
+        assert!(parser.parse(&mut stream).is_ok());
+        assert!(parser.parse(&mut stream).is_err());
+    }
 }
