@@ -21,6 +21,7 @@ pub use elastic_buffer::ElasticBufferStreamer;
 pub enum StreamerError {
     EndOfInput,
     BufferFull,
+    Utf8Error,
     InputError(std::io::ErrorKind),
 }
 
@@ -102,6 +103,9 @@ pub enum ParserErrorKind {
     /// Occurs when the buffer of the Streamer is full.
     BufferFull,
 
+    /// Occurs when the data read by the Streamer is not at Utf8 format.
+    Utf8Error,
+
     /// Occurs when the Streamer encountered an `StreamerError::InputError`.
     InputError(std::io::ErrorKind),
 }
@@ -110,6 +114,7 @@ impl ParserErrorKind {
     pub fn is_streamer_error_kind(&self) -> bool {
         match self {
             Self::BufferFull => true,
+            Self::Utf8Error => true,
             Self::InputError(_) => true,
             _ => false,
         }
@@ -121,6 +126,7 @@ impl std::convert::From<StreamerError> for ParserErrorKind {
         match error {
             StreamerError::InputError(e) => ParserErrorKind::InputError(e),
             StreamerError::BufferFull => ParserErrorKind::BufferFull,
+            StreamerError::Utf8Error => ParserErrorKind::Utf8Error,
             StreamerError::EndOfInput => ParserErrorKind::UnexpectedEndOfInput,
         }
     }

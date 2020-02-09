@@ -1,10 +1,10 @@
-use core::num::NonZeroUsize;
+use owning_ref::OwningHandle;
 use slice_deque::SliceDeque;
-use slice_of_array::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::io::Read;
 use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
+use std::str::CharIndices;
 
 use super::Streamer;
 use super::StreamerError;
@@ -77,7 +77,7 @@ impl CheckPointSet {
 
     fn sub_offset(&self, value: usize) {
         for cp in self.0.borrow().iter() {
-            let handled = cp.0.upgrade().unwrap(); // sub_offset has to be called right after min, so there is no unhandled value
+            let handled = cp.0.upgrade().unwrap(); // sub_offset has to be called right after min_checkpoint_position, so there is no unhandled value
             handled.set(handled.get() - value);
         }
     }
@@ -97,46 +97,29 @@ impl<R: Read> StreamerRange for Range<R> {
     }
 }
 
-fn read_exact_or_eof<R: Read>(
-    reader: &mut R,
-    mut chunk: &mut [u8],
-) -> std::io::Result<Option<NonZeroUsize>> {
-    while !chunk.is_empty() {
-        match reader.read(chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                let tmp = chunk;
-                chunk = &mut tmp[n..];
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-
-    Ok(NonZeroUsize::new(chunk.len()))
-}
-
 pub struct ElasticBufferStreamer<R: Read> {
     raw_read: R,
-    buffer: SliceDeque<[u8; CHUNK_SIZE]>,
+    buffer: OwningHandle<Box<SliceDeque<u8>>, CharIndices<'static>>,
     max_size: Option<usize>,
-    eof: Option<NonZeroUsize>,
-    checkpoints: CheckPointSet,
-    before_watchdog: bool,
+    eof: bool,
+    non_complete_char_len: u8,
     cursor_pos: usize,
-    offset: u64, // The capacity of this parameter limits the size of the stream
+    before_pos: Option<usize>,
+    checkpoints: CheckPointSet,
+    offset: u64, // The capacity of this parameter limits the length of the stream
 }
 
 impl<R: Read> ElasticBufferStreamer<R> {
     fn with_maybe_max_size(read: R, max_size: Option<usize>) -> Self {
         Self {
             raw_read: read,
-            buffer: SliceDeque::with_capacity(INITIAL_CAPACITY),
+            buffer: OwningHandle::new_with_fn(Box::new(SliceDeque::with_capacity(INITIAL_CAPACITY)), |_buffer| &"".char_indices()),
             max_size,
-            eof: None,
-            checkpoints: CheckPointSet::new(),
-            before_watchdog: false,
+            eof: false,
+            non_complete_char_len: 0,
             cursor_pos: 0,
+            before_pos: None,
+            checkpoints: CheckPointSet::new(),
             offset: 0,
         }
     }
@@ -146,35 +129,46 @@ impl<R: Read> ElasticBufferStreamer<R> {
     }
 
     pub fn with_max_size(read: R, max_size: usize) -> Self {
-        let max_buffer_size = if max_size % CHUNK_SIZE != 0 {
-            max_size / CHUNK_SIZE + 1
-        } else {
-            max_size / CHUNK_SIZE
+        Self::with_maybe_max_size(read, Some(max_size))
+    }
+
+    fn raw_buffered_len(&self) -> usize {
+        self.buffer.as_owner().len() - CHUNK_SIZE - self.non_complete_char_len as usize
+    }
+
+    /// UNSOUND : `new_cursor_pos` has to be the begin of a string.
+    fn set_cursor_pos(&mut self, new_cursor_pos: usize) {
+        self.buffer = OwningHandle::new_with_fn(self.buffer.to_owner(), |buffer| unsafe { std::str::from_utf8_unchecked(buffer.as_slice())[new_cursor_pos..self.raw_buffered_len()].char_indices() });
+        self.cursor_pos = new_cursor_pos;
+    }
+
+    fn read_new_chunk_from_raw(&mut self) -> std::io::Result<()>{
+        let buffer = self.buffer.to_owner();
+        let io_result = match self.raw_read.read(buffer[self.raw_buffered_len()..]) {
+            Ok(0) => {
+                self.eof = true;
+                Ok()
+            },
+            Ok(n) => {
+                buffer.extend(std::iter::repeat(0).take(CHUNK_SIZE - n));
+                Ok()
+            },
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => self.read_new_chunk_from_raw(),
+            Err(e) => return Err(e),
         };
-
-        Self::with_maybe_max_size(read, Some(max_buffer_size))
     }
 
-    fn chunk_index(&self) -> usize {
-        self.cursor_pos >> ITEM_INDEX_SIZE
-    }
-
-    fn item_index(&self) -> usize {
-        self.cursor_pos & ITEM_INDEX_MASK
-    }
-
-    fn free_useless_chunks(&mut self) {
+    fn free_useless_data(&mut self) {
         let checkpoint_pos_min = self.checkpoints.min_checkpoint_position();
         let global_pos_min =
             checkpoint_pos_min.map_or(self.cursor_pos, |cp_min| cp_min.min(self.cursor_pos));
-        let drain_quantity = global_pos_min / CHUNK_SIZE;
 
-        self.buffer.drain(..drain_quantity);
+        self.buffer.drain(..global_pos_min);
 
-        let offset_delta = drain_quantity * CHUNK_SIZE;
-        self.cursor_pos -= offset_delta;
-        self.offset += offset_delta as u64;
-        self.checkpoints.sub_offset(offset_delta);
+        self.cursor_pos -= global_pos_min;
+        self.before_pos.map(|before_pos_val| before_pos_val - global_pos_min);
+        self.offset += global_pos_min as u64;
+        self.checkpoints.sub_offset(global_pos_min);
     }
 
     pub fn buffer_len(&self) -> usize {
@@ -185,9 +179,9 @@ impl<R: Read> ElasticBufferStreamer<R> {
         let range_begin = from_cp.inner();
         let range_end = to_cp.inner();
 
-        let flat_slice = self.buffer.as_slice().flat();
+        let slice = self.buffer.as_slice();
 
-        &flat_slice[range_begin..range_end]
+        slice[range_begin..range_end]
     }
 }
 
@@ -196,37 +190,17 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
     type Range = Range<R>;
 
     fn next(&mut self) -> Result<u8, StreamerError> {
-        assert!(self.chunk_index() <= self.buffer.len());
-
-        self.before_watchdog = false;
-
-        if self.chunk_index() == self.buffer.len() {
-            assert!(self.eof.is_none());
-            self.free_useless_chunks();
-
-            if let Some(max_size) = self.max_size {
-                if self.buffer.len() >= max_size {
-                    return Err(StreamerError::BufferFull);
-                }
-            }
-
-            self.buffer.push_back([0; CHUNK_SIZE]);
-            self.eof = read_exact_or_eof(&mut self.raw_read, self.buffer.back_mut().unwrap())?;
-        }
-
-        if self.chunk_index() == self.buffer.len() - 1 {
-            if let Some(eof_pos_from_right) = self.eof {
-                if self.item_index() >= CHUNK_SIZE - eof_pos_from_right.get() {
-                    return Err(StreamerError::EndOfInput);
-                }
+        if let (cursor_pos, Some(c)) = (*self.buffer).next() {
+            self.before_pos = Some(self.cursor_pos);
+            self.cursor_pos = cursor_pos;
+            c
+        } else {
+            if !self.eof {
+                self.free_useless_data();
+                self.read_new_chunk_from_raw()?;
+                self.next()
             }
         }
-
-        let chunk = self.buffer.get(self.chunk_index()).unwrap(); // We can unwrap because self.chunk_index() < self.buffer.len()
-        let item = chunk[self.item_index()]; //  item_index < CHUNK_SIZE
-        self.cursor_pos += 1;
-
-        Ok(item)
     }
 
     fn position(&self) -> u64 {
@@ -238,15 +212,15 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
     }
 
     fn reset(&mut self, checkpoint: CheckPoint) {
-        self.cursor_pos = checkpoint.inner();
+        self.set_cursor_pos(checkpoint.inner());
     }
 
     fn before(&mut self) {
-        if self.before_watchdog {
-            panic!("Multiple `before` calls since the last `next`");
+        if let Some(before_pos) = self.before_pos {
+            self.set_cursor_pos(before_pos);
+            self.before_pos = None;
         } else {
-            self.cursor_pos -= 1;
-            self.before_watchdog = true;
+            panic!("Multiple `before` calls since the last `next`");
         }
     }
 
