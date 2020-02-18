@@ -92,8 +92,12 @@ pub struct Range<R: Read>(
 impl<R: Read> StreamerRange for Range<R> {
     type Input = ElasticBufferStreamer<R>;
 
-    fn to_ref<'a>(self, stream: &'a mut ElasticBufferStreamer<R>) -> &'a [u8] {
-        (*stream).range_ref_from_to_checkpoint(self.0, self.1)
+    fn to_ref<'a>(self, stream: &'a mut ElasticBufferStreamer<R>) -> &'a str {
+        let bytes_range = (*stream).range_ref_from_to_checkpoint(self.0, self.1);
+
+        unsafe {
+            std::str::from_utf8_unchecked(bytes_range)
+        }
     }
 }
 
@@ -496,11 +500,11 @@ mod tests {
 
         let rg1 = stream.range_from_checkpoint(cp1).to_ref(&mut stream);
 
-        assert_eq!(rg1, &(b"This ")[..]);
+        assert_eq!(rg1, &"This "[..]);
 
         let rg2 = stream.range_from_checkpoint(cp2).to_ref(&mut stream);
 
-        assert_eq!(rg2, &(b"s ")[..]);
+        assert_eq!(rg2, &"s "[..]);
     }
 
     #[test]

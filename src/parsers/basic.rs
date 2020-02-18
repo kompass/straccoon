@@ -1,5 +1,4 @@
 use crate::{Parser, ParserError, ParserErrorKind, Streamer, StreamerError};
-use ascii::AsciiChar;
 use std::marker::PhantomData;
 
 pub struct Eof<S: Streamer>(PhantomData<S>);
@@ -29,11 +28,11 @@ pub fn eof<S: Streamer>() -> Eof<S> {
     Eof(PhantomData)
 }
 
-pub struct Byte<S: Streamer, F: FnMut(u8) -> bool>(F, PhantomData<S>);
+pub struct CharPred<S: Streamer, F: FnMut(char) -> bool>(F, PhantomData<S>);
 
-impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
+impl<S: Streamer, F: FnMut(char) -> bool> Parser for CharPred<S, F> {
     type Input = S;
-    type Output = u8;
+    type Output = char;
 
     fn get(&mut self, stream: &mut Self::Input) -> Result<Self::Output, ParserError> {
         match stream.next() {
@@ -56,58 +55,58 @@ impl<S: Streamer, F: FnMut(u8) -> bool> Parser for Byte<S, F> {
     }
 }
 
-pub fn byte_predicate<S: Streamer, F: FnMut(u8) -> bool>(predicate: F) -> Byte<S, F> {
-    Byte(predicate, PhantomData)
+pub fn char_predicate<S: Streamer, F: FnMut(char) -> bool>(predicate: F) -> CharPred<S, F> {
+    CharPred(predicate, PhantomData)
 }
 
-macro_rules! ascii_predicate_parser {
+macro_rules! predicate_parser {
     ($name:ident, $f: ident) => {{
-        byte_predicate(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f()).unwrap_or(false))
+        char_predicate(|c: char| c.$f())
     }};
     ($name:ident, $f: ident $($args:tt)+) => {{
-        byte_predicate(|c: u8| AsciiChar::from_ascii(c).map(|c| c.$f $($args)+).unwrap_or(false))
+        char_predicate(|c: char| c.$f $($args)+)
     }};
 }
 
-pub fn alpha_num<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    ascii_predicate_parser!(alpha_num, is_alphanumeric)
+pub fn alpha_num<S: Streamer>() -> CharPred<S, impl FnMut(char) -> bool> {
+    predicate_parser!(alpha_num, is_alphanumeric)
 }
 
-pub fn digit<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    ascii_predicate_parser!(digit, is_ascii_digit)
+pub fn digit<S: Streamer>() -> CharPred<S, impl FnMut(char) -> bool> {
+    predicate_parser!(digit, is_ascii_digit)
 }
 
-pub fn letter<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    ascii_predicate_parser!(letter, is_alphabetic)
+pub fn letter<S: Streamer>() -> CharPred<S, impl FnMut(char) -> bool> {
+    predicate_parser!(letter, is_alphabetic)
 }
 
-pub fn space<S: Streamer>() -> Byte<S, impl FnMut(u8) -> bool> {
-    ascii_predicate_parser!(space, is_ascii_whitespace)
+pub fn space<S: Streamer>() -> CharPred<S, impl FnMut(char) -> bool> {
+    predicate_parser!(space, is_ascii_whitespace)
 }
 
-pub fn byte<S: Streamer>(b: u8) -> Byte<S, impl FnMut(u8) -> bool> {
-    byte_predicate(move |c: u8| c == b)
+pub fn char<S: Streamer>(c: char) -> CharPred<S, impl FnMut(char) -> bool> {
+    char_predicate(move |d: char| c == d)
 }
 
-pub fn one_of<S: Streamer>(bytes: Vec<u8>) -> Byte<S, impl FnMut(u8) -> bool> { // TODO : use array of any size when it will be possible.
-    byte_predicate(move |c: u8| bytes.iter().any(|&b| c == b))
+pub fn one_of<S: Streamer>(chars: Vec<char>) -> CharPred<S, impl FnMut(char) -> bool> { // TODO : use array of any size when it will be possible.
+    char_predicate(move |c: char| chars.iter().any(|&b| c == b))
 }
 
-pub fn none_of<S: Streamer>(bytes: Vec<u8>) -> Byte<S, impl FnMut(u8) -> bool> {
-    byte_predicate(move |c: u8| bytes.iter().all(|&b| c != b))
+pub fn none_of<S: Streamer>(chars: Vec<char>) -> CharPred<S, impl FnMut(char) -> bool> {
+    char_predicate(move |c: char| chars.iter().all(|&b| c != b))
 }
 
-pub struct Bytes<S: Streamer>(&'static [u8], PhantomData<S>);
+pub struct Chars<S: Streamer>(&'static str, PhantomData<S>);
 
-impl<S: Streamer> Parser for Bytes<S> {
+impl<S: Streamer> Parser for Chars<S> {
     type Input = S;
     type Output = <Self::Input as Streamer>::Range;
 
     fn parse(&mut self, stream: &mut S) -> Result<(), ParserError> {
         assert!(self.0.len() > 0);
 
-        for b in self.0 {
-            byte_predicate(move |c: u8| c == *b).parse(stream)?;
+        for b in self.0.chars() {
+            char_predicate(move |c: char| c == b).parse(stream)?;
         }
 
         Ok(())
@@ -118,22 +117,21 @@ impl<S: Streamer> Parser for Bytes<S> {
     }
 }
 
-pub fn bytes<S: Streamer>(range: &'static [u8]) -> Bytes<S> {
-    Bytes(range, PhantomData)
+pub fn chars<S: Streamer>(range: &'static str) -> Chars<S> {
+    Chars(range, PhantomData)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::elastic_buffer::ElasticBufferStreamer;
-    use crate::*;
 
     #[test]
     fn it_parses_a_precise_byte() {
         let fake_read = &b"This is the text !"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
-        let mut parser = byte(b'T');
+        let mut parser = char('T');
 
         assert!(parser.parse(&mut stream).is_ok());
         assert_eq!(stream.position(), 1);
@@ -175,7 +173,7 @@ mod tests {
         let fake_read = &b"Bounga"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
-        let mut parser = one_of(vec![b'a', b'B', b')']);
+        let mut parser = one_of(vec!['a', 'B', ')']);
 
         assert!(parser.parse(&mut stream).is_ok());
         assert!(parser.parse(&mut stream).is_err());
@@ -186,7 +184,7 @@ mod tests {
         let fake_read = &b"Bounga"[..];
         let mut stream = ElasticBufferStreamer::unlimited(fake_read);
 
-        let mut parser = none_of(vec![b'a', b'o', b')']);
+        let mut parser = none_of(vec!['a', 'o', ')']);
 
         assert!(parser.parse(&mut stream).is_ok());
         assert!(parser.parse(&mut stream).is_err());
