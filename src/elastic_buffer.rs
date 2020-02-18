@@ -4,14 +4,14 @@ use std::cell::{Cell, RefCell};
 use std::io::Read;
 use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
-use std::str::CharIndices;
+use std::str::Chars;
+use tinyvec::ArrayVec;
 
 use super::Streamer;
 use super::StreamerError;
 use super::StreamerRange;
 
 const ITEM_INDEX_SIZE: usize = 13;
-const ITEM_INDEX_MASK: usize = (1 << ITEM_INDEX_SIZE) - 1;
 pub const CHUNK_SIZE: usize = 1 << ITEM_INDEX_SIZE;
 pub const INITIAL_CAPACITY: usize = 4;
 
@@ -97,26 +97,45 @@ impl<R: Read> StreamerRange for Range<R> {
     }
 }
 
+struct CharIterHandler<'a>(Chars<'a>);
+
+impl<'a> std::ops::Deref for CharIterHandler<'a> {
+    type Target = Chars<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> std::ops::DerefMut for CharIterHandler<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 pub struct ElasticBufferStreamer<R: Read> {
     raw_read: R,
-    buffer: OwningHandle<Box<SliceDeque<u8>>, CharIndices<'static>>,
+    buffer: Option<OwningHandle<Box<SliceDeque<u8>>, CharIterHandler<'static>>>,
     max_size: Option<usize>,
     eof: bool,
-    non_complete_char_len: u8,
+    non_complete_char: ArrayVec<[u8; 3]>,
     cursor_pos: usize,
     before_pos: Option<usize>,
     checkpoints: CheckPointSet,
-    offset: u64, // The capacity of this parameter limits the length of the stream
+    offset: u64,
 }
 
 impl<R: Read> ElasticBufferStreamer<R> {
     fn with_maybe_max_size(read: R, max_size: Option<usize>) -> Self {
+        let deque = SliceDeque::with_capacity(INITIAL_CAPACITY);
         Self {
             raw_read: read,
-            buffer: OwningHandle::new_with_fn(Box::new(SliceDeque::with_capacity(INITIAL_CAPACITY)), |_buffer| &"".char_indices()),
+            buffer: Some(OwningHandle::new_with_fn(Box::new(deque), |_buffer| {
+                CharIterHandler("".chars())
+            })),
             max_size,
             eof: false,
-            non_complete_char_len: 0,
+            non_complete_char: ArrayVec::new(),
             cursor_pos: 0,
             before_pos: None,
             checkpoints: CheckPointSet::new(),
@@ -132,56 +151,121 @@ impl<R: Read> ElasticBufferStreamer<R> {
         Self::with_maybe_max_size(read, Some(max_size))
     }
 
-    fn raw_buffered_len(&self) -> usize {
-        self.buffer.as_owner().len() - CHUNK_SIZE - self.non_complete_char_len as usize
-    }
-
-    /// UNSOUND : `new_cursor_pos` has to be the begin of a string.
+    /// Warning : `new_cursor_pos` has to be the begin of a string.
     fn set_cursor_pos(&mut self, new_cursor_pos: usize) {
-        self.buffer = OwningHandle::new_with_fn(self.buffer.to_owner(), |buffer| unsafe { std::str::from_utf8_unchecked(buffer.as_slice())[new_cursor_pos..self.raw_buffered_len()].char_indices() });
         self.cursor_pos = new_cursor_pos;
+        let buffer = self.buffer.take().unwrap().into_owner();
+        self.set_char_iter(buffer);
     }
 
-    fn read_new_chunk_from_raw(&mut self) -> std::io::Result<()>{
-        let buffer = self.buffer.to_owner();
-        let io_result = match self.raw_read.read(buffer[self.raw_buffered_len()..]) {
-            Ok(0) => {
+    /// |      BUFFERED       |         NEWLY READ              |
+    /// |-----------------|---|-----------------------------|---|
+    ///           |         |                                 |
+    ///           |        non complete last buffered char    |
+    ///           |        (0-3 bytes)                       non complete newly read char
+    ///           |                                          (0-3 bytes)
+    ///          valid str (checked at last method call)
+    ///
+    /// After call :
+    ///
+    /// |-----------------|---|-----------------------------|---|
+    /// |    valid str (checked during this method call)    | |
+    ///                                                       |
+    ///                                                  non complete last buffered char
+    ///                                                  (0-3 bytes)
+    fn read_new_chunk_from_raw(&mut self) -> Result<(), StreamerError> {
+        let mut buffer = self.buffer.take().unwrap().into_owner();
+        let valid_buffered_len = buffer.len();
+
+        buffer.extend_from_slice(self.non_complete_char.as_slice());
+        let total_buffered_len = buffer.len();
+
+        buffer.resize(total_buffered_len + CHUNK_SIZE, 0);
+
+        let io_result = self.raw_read.read(&mut buffer[total_buffered_len..]);
+
+        if let Ok(newly_read_len) = io_result {
+            buffer.truncate(total_buffered_len + newly_read_len);
+
+            if newly_read_len == 0 {
+                buffer.truncate(valid_buffered_len);
                 self.eof = true;
-                Ok()
-            },
-            Ok(n) => {
-                buffer.extend(std::iter::repeat(0).take(CHUNK_SIZE - n));
-                Ok()
-            },
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => self.read_new_chunk_from_raw(),
-            Err(e) => return Err(e),
-        };
+            } else {
+                // Check if buffer is a valid utf8 str (maybe with an non complete char at the end).
+                // `buffer[..valid_buffered_len]` is already checked, so we only check `buffer[valid_buffered_len..]`.
+                if let Err(utf8_error) = std::str::from_utf8(&buffer[valid_buffered_len..]) {
+                    let invalid_bytes: usize =
+                        buffer.len() - valid_buffered_len - utf8_error.valid_up_to();
+
+                    if invalid_bytes <= 3 {
+                        self.non_complete_char.clear();
+                        self.non_complete_char
+                            .extend_from_slice(&buffer[(buffer.len() - invalid_bytes)..]);
+                        buffer.truncate(buffer.len() - invalid_bytes);
+                    } else {
+                        buffer.truncate(valid_buffered_len);
+                        return Err(StreamerError::Utf8Error);
+                    }
+                }
+            }
+        } else {
+            buffer.truncate(valid_buffered_len);
+        }
+
+        self.set_char_iter(buffer);
+
+        match io_result {
+            Ok(_) => Ok(()),
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                self.read_new_chunk_from_raw()
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
-    fn free_useless_data(&mut self) {
+    fn set_char_iter(&mut self, buffer: Box<SliceDeque<u8>>) {
+        self.buffer = Some(OwningHandle::new_with_fn(buffer, |buffer| unsafe {
+            let buffer = buffer.as_ref().unwrap();
+            CharIterHandler(
+                std::str::from_utf8_unchecked(buffer.as_slice())
+                    [self.cursor_pos.min(buffer.len())..]
+                    .chars(),
+            )
+        }));
+    }
+
+    fn free_useless_data(&mut self) -> usize {
         let checkpoint_pos_min = self.checkpoints.min_checkpoint_position();
-        let global_pos_min =
-            checkpoint_pos_min.map_or(self.cursor_pos, |cp_min| cp_min.min(self.cursor_pos));
+        let cursor_pos_min = self.before_pos.unwrap_or(self.cursor_pos);
+        let useless_amount =
+            checkpoint_pos_min.map_or(cursor_pos_min, |cp_min| cp_min.min(cursor_pos_min));
 
-        self.buffer.drain(..global_pos_min);
+        let mut buffer = self.buffer.take().unwrap().into_owner();
+        buffer.drain(..useless_amount);
 
-        self.cursor_pos -= global_pos_min;
-        self.before_pos.map(|before_pos_val| before_pos_val - global_pos_min);
-        self.offset += global_pos_min as u64;
-        self.checkpoints.sub_offset(global_pos_min);
+        self.cursor_pos -= useless_amount;
+        self.before_pos = self
+            .before_pos
+            .map(|before_pos_val| before_pos_val - useless_amount);
+        self.offset += useless_amount as u64;
+        self.checkpoints.sub_offset(useless_amount);
+        let final_len = buffer.len();
+        self.set_char_iter(buffer);
+
+        final_len
     }
 
     pub fn buffer_len(&self) -> usize {
-        self.buffer.len()
+        self.buffer.as_ref().unwrap().as_owner().len()
     }
 
     fn range_ref_from_to_checkpoint(&mut self, from_cp: CheckPoint, to_cp: CheckPoint) -> &[u8] {
         let range_begin = from_cp.inner();
         let range_end = to_cp.inner();
 
-        let slice = self.buffer.as_slice();
+        let slice = self.buffer.as_ref().unwrap().as_owner().as_slice();
 
-        slice[range_begin..range_end]
+        &slice[range_begin..range_end]
     }
 }
 
@@ -189,16 +273,24 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
     type CheckPoint = CheckPoint;
     type Range = Range<R>;
 
-    fn next(&mut self) -> Result<u8, StreamerError> {
-        if let (cursor_pos, Some(c)) = (*self.buffer).next() {
+    fn next(&mut self) -> Result<char, StreamerError> {
+        if let Some(c) = (*self.buffer.as_mut().unwrap()).next() {
             self.before_pos = Some(self.cursor_pos);
-            self.cursor_pos = cursor_pos;
-            c
+            self.cursor_pos += c.len_utf8();
+            Ok(c)
         } else {
             if !self.eof {
-                self.free_useless_data();
+                let len_before_read = self.free_useless_data();
+                if let Some(max_size) = self.max_size {
+                    if len_before_read + CHUNK_SIZE > max_size {
+                        return Err(StreamerError::BufferFull);
+                    }
+                }
+
                 self.read_new_chunk_from_raw()?;
                 self.next()
+            } else {
+                Err(StreamerError::EndOfInput)
             }
         }
     }
@@ -235,21 +327,22 @@ impl<R: Read> Streamer for ElasticBufferStreamer<R> {
 mod tests {
     use super::*;
 
+    const UTF8_LOREM_IPSUM : &str = "What a beautiful sentence that 念北受決評念北受決評念北受決評念北受決評念北受決評念北受決評 ! Doe's it make sense ! Probably no.";
+
     #[test]
     fn it_goes_next_on_one_chunk() {
-        let fake_read = &b"This is the text !"[..];
-        let mut stream = ElasticBufferStreamer::unlimited(fake_read);
-        assert_eq!(stream.next(), Ok(b'T'));
-        assert_eq!(stream.next(), Ok(b'h'));
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        let mut stream = ElasticBufferStreamer::unlimited(UTF8_LOREM_IPSUM.as_bytes());
+        assert_eq!(stream.next(), Ok('W'));
+        assert_eq!(stream.next(), Ok('h'));
+        assert_eq!(stream.next(), Ok('a'));
+        assert_eq!(stream.next(), Ok('t'));
+        assert_eq!(stream.next(), Ok(' '));
 
-        for _ in 0..12 {
+        for _ in 0..(UTF8_LOREM_IPSUM.chars().count() - 6) {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.next(), Ok(b'!'));
+        assert_eq!(stream.next(), Ok('.'));
         assert_eq!(stream.next(), Err(StreamerError::EndOfInput));
     }
 
@@ -257,38 +350,38 @@ mod tests {
     fn it_goes_next_on_multiple_chunks() {
         let mut fake_read = String::with_capacity(CHUNK_SIZE * 3);
 
-        let beautiful_sentence = "This is a sentence, what a beautiful sentence !";
-        let number_of_sentences = CHUNK_SIZE * 3 / beautiful_sentence.len();
+        let lorem_ipsum_len = UTF8_LOREM_IPSUM.chars().count();
+        let number_of_sentences = CHUNK_SIZE * 3 / lorem_ipsum_len;
         for _ in 0..number_of_sentences {
-            fake_read += beautiful_sentence;
+            fake_read += UTF8_LOREM_IPSUM;
         }
 
         let mut stream = ElasticBufferStreamer::unlimited(fake_read.as_bytes());
 
-        assert_eq!(stream.next(), Ok(b'T'));
-        assert_eq!(stream.next(), Ok(b'h'));
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('W'));
+        assert_eq!(stream.next(), Ok('h'));
+        assert_eq!(stream.next(), Ok('a'));
+        assert_eq!(stream.next(), Ok('t'));
+        assert_eq!(stream.next(), Ok(' '));
 
         let first_sentence_of_next_chunk_dist =
-            CHUNK_SIZE + beautiful_sentence.len() - CHUNK_SIZE % beautiful_sentence.len();
+            CHUNK_SIZE + lorem_ipsum_len - CHUNK_SIZE % lorem_ipsum_len;
         for _ in 0..first_sentence_of_next_chunk_dist {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('a'));
+        assert_eq!(stream.next(), Ok(' '));
+        assert_eq!(stream.next(), Ok('b'));
 
         for _ in 0..first_sentence_of_next_chunk_dist {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.next(), Ok(b'a'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('e'));
+        assert_eq!(stream.next(), Ok('a'));
 
-        let dist_to_last_char = number_of_sentences * beautiful_sentence.len()
+        let dist_to_last_char = number_of_sentences * lorem_ipsum_len
             - 10 // Letters already read : "This is a "
             - 2 * first_sentence_of_next_chunk_dist
             - 1;
@@ -296,7 +389,7 @@ mod tests {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.next(), Ok(b'!'));
+        assert_eq!(stream.next(), Ok('.'));
         assert_eq!(stream.next(), Err(StreamerError::EndOfInput));
     }
 
@@ -318,36 +411,36 @@ mod tests {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.next(), Ok(b'T'));
-        assert_eq!(stream.next(), Ok(b'h'));
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('T'));
+        assert_eq!(stream.next(), Ok('h'));
+        assert_eq!(stream.next(), Ok('i'));
+        assert_eq!(stream.next(), Ok('s'));
+        assert_eq!(stream.next(), Ok(' '));
 
         let cp = stream.checkpoint();
 
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('i'));
+        assert_eq!(stream.next(), Ok('s'));
+        assert_eq!(stream.next(), Ok(' '));
 
         stream.reset(cp);
         let cp = stream.checkpoint();
 
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('i'));
+        assert_eq!(stream.next(), Ok('s'));
+        assert_eq!(stream.next(), Ok(' '));
 
         for _ in 0..first_sentence_of_next_chunk_dist {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.next(), Ok(b'a'));
+        assert_eq!(stream.next(), Ok('a'));
 
         stream.reset(cp);
 
-        assert_eq!(stream.next(), Ok(b'i'));
-        assert_eq!(stream.next(), Ok(b's'));
-        assert_eq!(stream.next(), Ok(b' '));
+        assert_eq!(stream.next(), Ok('i'));
+        assert_eq!(stream.next(), Ok('s'));
+        assert_eq!(stream.next(), Ok(' '));
     }
 
     #[test]
@@ -364,24 +457,24 @@ mod tests {
 
         let cp = stream.checkpoint();
         assert_eq!(stream.buffer_len(), 0);
-        assert_eq!(stream.next(), Ok(b'T'));
-        assert_eq!(stream.buffer_len(), 1);
+        assert_eq!(stream.next(), Ok('T'));
+        assert_eq!(stream.buffer_len(), CHUNK_SIZE);
 
         for _ in 0..CHUNK_SIZE {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.buffer_len(), 2);
+        assert_eq!(stream.buffer_len(), 2 * CHUNK_SIZE);
 
         stream.reset(cp);
 
-        assert_eq!(stream.next(), Ok(b'T'));
+        assert_eq!(stream.next(), Ok('T'));
 
         for _ in 0..2 * CHUNK_SIZE {
             assert!(stream.next().is_ok());
         }
 
-        assert_eq!(stream.buffer_len(), 1);
+        assert!(stream.buffer_len() < 2 * CHUNK_SIZE);
     }
 
     #[test]

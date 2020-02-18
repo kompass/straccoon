@@ -7,6 +7,6 @@ edition = "2018"
 
 [dependencies]
 ascii = "1.0"
-slice-deque = "0.3"
-slice-of-array = "0.2"
 owning_ref = { git = "https://github.com/Kimundi/owning-ref-rs" }
+slice-deque = "0.3"
+tinyvec = "0.3"
